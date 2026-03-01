@@ -18,3 +18,9 @@ KEEP_WORKSPACE = True
 
 # Logging level: DEBUG | INFO | WARNING | ERROR
 LOG_LEVEL = "INFO"
+
+# ---------------------------------------------------------------------------
+# Gemini LLM Configuration
+# ---------------------------------------------------------------------------
+GEMINI_MODEL       = "gemini-2.5-flash"
+GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
