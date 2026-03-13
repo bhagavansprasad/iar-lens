@@ -28,8 +28,24 @@ RISK_ICON = {
     "unknown": "⚪ Unknown",
 }
 
+RECOMMENDATION_ICON = {
+    "approve"                 : "✅",
+    "approve_with_conditions" : "🟡",
+    "reject"                  : "❌",
+}
+
 def _risk(level: str) -> str:
     return RISK_ICON.get(str(level).lower(), f"⚪ {level}")
+
+def _rec_icon(recommendation: str, overall_risk: str) -> str:
+    """
+    Returns the appropriate icon for the recommendation.
+    approve_with_conditions uses 🔴 when overall risk is HIGH, else 🟡.
+    """
+    rec = str(recommendation).lower()
+    if rec == "approve_with_conditions" and str(overall_risk).lower() == "high":
+        return "🔴"
+    return RECOMMENDATION_ICON.get(rec, "⚠️")
 
 
 # ---------------------------------------------------------------------------
@@ -267,13 +283,15 @@ def _build_header(delta: dict, report: dict) -> str:
     generated_at = report.get("generated_at", datetime.now(timezone.utc).isoformat())
     files_read   = report.get("files_read", 0)
     processors   = report.get("processors_investigated", 0)
-    overall_risk = _risk(report.get("overall_risk", "unknown"))
-    rec          = report.get("recommendation", "").replace("_", " ").upper()
+    overall_risk    = _risk(report.get("overall_risk", "unknown"))
+    rec_raw         = report.get("recommendation", "")
+    rec_label       = rec_raw.replace("_", " ").upper()
+    rec_icon        = _rec_icon(rec_raw, report.get("overall_risk", ""))
 
     return f"""# {integration} — Change Review Report
 
 **Version:** {version_from} → {version_to}
-**Overall Risk:** {overall_risk} | **Recommendation:** ⚠️ {rec}
+**Overall Risk:** {overall_risk} | **Recommendation:** {rec_icon} {rec_label}
 
 ---
 
@@ -292,9 +310,11 @@ def _build_header(delta: dict, report: dict) -> str:
 
 def _build_executive_summary(report: dict, delta: dict) -> str:
     stats        = delta.get("statistics", {})
-    overall_risk = _risk(report.get("overall_risk", "unknown"))
-    rec          = report.get("recommendation", "").replace("_", " ").upper()
-    new_steps    = report.get("new_steps", [])
+    overall_risk    = _risk(report.get("overall_risk", "unknown"))
+    rec_raw         = report.get("recommendation", "")
+    rec             = rec_raw.replace("_", " ").upper()
+    rec_icon        = _rec_icon(rec_raw, report.get("overall_risk", ""))
+    new_steps       = report.get("new_steps", [])
     removed_steps= report.get("removed_steps", [])
 
     # What changed
@@ -326,7 +346,7 @@ def _build_executive_summary(report: dict, delta: dict) -> str:
 | Field | Value |
 |---|---|
 | **Overall Risk** | {overall_risk} |
-| **Recommendation** | ⚠️ {rec} |
+| **Recommendation** | {rec_icon} {rec} |
 
 **What Changed:**
 {what_changed}
