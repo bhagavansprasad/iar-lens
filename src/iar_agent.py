@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from langgraph.graph import StateGraph, START, END
-import google.generativeai as genai
+import google.genai as genai
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
