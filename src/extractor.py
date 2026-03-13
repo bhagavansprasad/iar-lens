@@ -40,7 +40,7 @@ def extract_iar(iar_path: str, workspace_dir: str) -> dict:
 
     # Derive extraction folder name from IAR filename
     iar_filename = os.path.basename(iar_path)
-    folder_name = iar_filename.replace(".iar.zip", "").replace(".iar", "").replace(".zip", "")
+    folder_name = iar_filename.replace(".iar.zip", "").replace(".iar", "").replace(".zip", "").replace(".car", "")
     extract_path = os.path.join(workspace_dir, folder_name)
 
     logger.info(f"Extracting: {iar_path} → {extract_path}")
@@ -82,17 +82,56 @@ def extract_iar(iar_path: str, workspace_dir: str) -> dict:
 
 def find_project_xml(root_dir: str) -> str | None:
     """
-    Recursively searches for project.xml inside the extracted IAR folder.
+    Recursively searches for project.xml inside the extracted IAR/CAR folder.
+
+    Option B — when multiple project.xml files are found (e.g. CAR files
+    that bundle both an ai_agents and an integrations project), selects
+    the one belonging to the integration with the most flow processors.
+    This is robust across both .iar and .car file structures without
+    relying on folder naming conventions.
 
     Args:
-        root_dir: root of the extracted IAR
+        root_dir: root of the extracted IAR/CAR
 
     Returns:
-        Full path to project.xml, or None if not found
+        Full path to the best matching project.xml, or None if not found
     """
+    import xml.etree.ElementTree as ET
+
+    # Collect all project.xml files
+    candidates = []
     for dirpath, dirnames, filenames in os.walk(root_dir):
         for filename in filenames:
             if filename == "project.xml":
-                return os.path.join(dirpath, filename)
+                candidates.append(os.path.join(dirpath, filename))
 
-    return None
+    if not candidates:
+        return None
+
+    # If only one found — return it directly (IAR case)
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # Multiple found (CAR case) — pick the one with the most processors
+    best_path  = None
+    best_count = -1
+
+    for path in candidates:
+        try:
+            tree  = ET.parse(path)
+            root  = tree.getroot()
+            count = sum(
+                1 for _ in root.iter(
+                    "{http://www.oracle.com/2014/03/ics/flow/definition}processor"
+                )
+            )
+            logger.debug(f"  project.xml candidate: {path} ({count} processors)")
+            if count > best_count:
+                best_count = count
+                best_path  = path
+        except ET.ParseError as e:
+            logger.warning(f"  Skipping unparseable project.xml: {path} | {e}")
+            continue
+
+    logger.info(f"Selected project.xml: {best_path} ({best_count} processors)")
+    return best_path

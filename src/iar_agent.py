@@ -170,6 +170,23 @@ async def investigate_node(state: IARReviewAgentState) -> IARReviewAgentState:
 
         print(f"\n   [{i}/{len(reading_list)}] {status} — {step_name} ({processor_id})")
 
+        # globalVariableDefinition steps never have processor files on disk in OIC —
+        # they are declared inline in project.xml only. Skip file lookup and describe generically.
+        if step_type == "globalVariableDefinition":
+            print(f"      ℹ️  Skipping file lookup — globalVariableDefinition has no processor files in OIC")
+            findings.append({
+                "processor_id"    : processor_id,
+                "step_name"       : step_name,
+                "step_type"       : step_type,
+                "status"          : status,
+                "purpose"         : "Declares a global variable available across the entire integration flow.",
+                "business_impact" : "Introduces a new shared variable that can be read or written by any subsequent step; review how it is initialised and used downstream.",
+                "technical_detail": "Global variable definitions in OIC are declared in project.xml and have no separate processor files. The variable name, type, and default value are embedded in the XML definition.",
+                "risk_level"      : "low",
+                "risk_reason"     : "Global variable declarations are low risk by themselves; risk depends on how the variable is used in downstream steps."
+            })
+            continue
+
         # Step 1: List files for this processor
         file_list_result = list_processor_files(processor_id, version=version)
 
