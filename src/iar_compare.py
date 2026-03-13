@@ -14,8 +14,9 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import config
-from extractor    import extract_iar
-from flow_compare import extract_steps, compute_delta
+from extractor         import extract_iar
+from flow_compare      import extract_steps, compute_delta
+from flow_understander import understand_flow
 
 
 def setup_logging():
@@ -88,7 +89,26 @@ def run_comparison() -> dict:
     delta = compute_delta(source_data, target_data)
 
     # -----------------------------------------------------------------------
-    # Step 4: Assemble final report
+    # Step 4b: Understand full flow context with Gemini (Phase 1b)
+    # -----------------------------------------------------------------------
+    logger.info("Step 4b: Understanding full flow context (Gemini)")
+
+    flow_context = understand_flow(
+        integration  = source_data["integration_name"],
+        version_from = source_data["version"],
+        version_to   = target_data["version"],
+        source_data  = source_data,
+        target_data  = target_data,
+        delta        = delta,
+        output_dir   = config.OUTPUT_DIR
+    )
+
+    print(f"\n✅ Flow context generated")
+    print(f"   Change type : {flow_context.get('change_type', '?')}")
+    print(f"   Purpose     : {flow_context.get('integration_purpose', '')[:100]}...")
+
+    # -----------------------------------------------------------------------
+    # Step 5: Assemble final report
     # -----------------------------------------------------------------------
     report = {
         "integration"   : source_data["integration_name"],
@@ -116,7 +136,7 @@ def run_comparison() -> dict:
     }
 
     # -----------------------------------------------------------------------
-    # Step 5: Write delta.json
+    # Step 6: Write delta.json
     # -----------------------------------------------------------------------
     output_file = os.path.join(config.OUTPUT_DIR, "delta.json")
     with open(output_file, "w", encoding="utf-8") as f:
@@ -125,7 +145,7 @@ def run_comparison() -> dict:
     logger.info(f"Output written: {output_file}")
 
     # -----------------------------------------------------------------------
-    # Step 6: Cleanup workspace if configured
+    # Step 7: Cleanup workspace if configured
     # -----------------------------------------------------------------------
     if not config.KEEP_WORKSPACE:
         logger.info("Cleaning up workspace...")
