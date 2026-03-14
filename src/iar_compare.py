@@ -37,7 +37,7 @@ def run_comparison() -> dict:
         1. Extract both IAR files into workspace
         2. Parse project.xml from each
         3. Compute the flow step delta
-        4. Write delta.json to output directory
+        4. Write <label>_delta.json to output directory
 
     Returns:
         Final delta report as a dict
@@ -138,9 +138,11 @@ def run_comparison() -> dict:
         logger.warning(f"Flow Understander failed (non-fatal): {e}")
 
     # -----------------------------------------------------------------------
-    # Step 5: Write delta.json
+    # Step 5: Write <label>_delta.json
     # -----------------------------------------------------------------------
-    output_file = os.path.join(config.OUTPUT_DIR, "delta.json")
+    label       = getattr(config, "LABEL", None)
+    filename    = f"{label}_delta.json" if label else "delta.json"
+    output_file = os.path.join(config.OUTPUT_DIR, filename)
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 

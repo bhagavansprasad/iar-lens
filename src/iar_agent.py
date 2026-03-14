@@ -53,17 +53,19 @@ def _parse_llm_json(response_text: str) -> Dict | None:
 
 async def init_node(state: IARReviewAgentState) -> IARReviewAgentState:
     """
-    Loads delta.json and <label>_flow_context.json, initializes all state fields.
+    Loads <label>_delta.json and <label>_flow_context.json, initializes all state fields.
     """
     print("\n[INIT] Loading delta and flow context, initializing state...")
 
-    delta_path = state.get("delta_path", config.OUTPUT_DIR + "delta.json")
+    label      = getattr(config, "LABEL", None)
+    dfname     = f"{label}_delta.json" if label else "delta.json"
+    delta_path = state.get("delta_path", config.OUTPUT_DIR + dfname)
     resolved   = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", delta_path)
     )
 
     if not os.path.exists(resolved):
-        raise FileNotFoundError(f"delta.json not found at: {resolved}")
+        raise FileNotFoundError(f"{dfname} not found at: {resolved}")
 
     with open(resolved, "r", encoding="utf-8") as f:
         delta = json.load(f)
@@ -425,7 +427,7 @@ async def run_agent():
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     initial_state = IARReviewAgentState(
-        delta_path   = config.OUTPUT_DIR + "delta.json",
+        delta_path   = config.OUTPUT_DIR + (f"{getattr(config, 'LABEL', None)}_delta.json" if getattr(config, 'LABEL', None) else "delta.json"),
         version_from = "",
         version_to   = "",
         integration  = "",

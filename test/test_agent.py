@@ -3,7 +3,7 @@
 # Standalone test for the Phase 2 IAR Review Agent.
 #
 # Assumes Stage 1 (run_comparison) has already run and produced:
-#   output/delta.json
+#   output/<label>_delta.json
 #   output/<label>_flow_context.json
 #
 # Usage (from project root):
@@ -34,7 +34,7 @@ PAIRS = {
 def check_inputs(output_dir: str, label: str) -> bool:
     """Verify Stage 1 outputs exist before running the agent."""
     required = [
-        (os.path.join(output_dir, "delta.json"),                   "delta.json"),
+        (os.path.join(output_dir, f"{label}_delta.json"),           f"{label}_delta.json"),
         (os.path.join(output_dir, f"{label}_flow_context.json"),   f"{label}_flow_context.json"),
     ]
     ok = True
