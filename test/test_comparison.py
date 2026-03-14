@@ -4,7 +4,7 @@
 #
 # Patches config for the requested pair and runs Stage 1 in isolation.
 # Produces:
-#   output/delta.json
+#   output/<label>_delta.json
 #   output/<label>_flow_context.json
 #
 # Usage (from project root):
@@ -95,7 +95,7 @@ def run_test(pair_key: str):
     print(f"  Shifted     : {stats.get('positionally_shifted', 0)}")
     print(f"  Unchanged   : {stats.get('unchanged_count', 0)}")
 
-    delta_path = os.path.join(output_dir, "delta.json")
+    delta_path = os.path.join(output_dir, f"{label}_delta.json")
     fc_path    = os.path.join(output_dir, f"{label}_flow_context.json")
 
     print(f"\n  Outputs:")

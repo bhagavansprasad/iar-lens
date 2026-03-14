@@ -113,7 +113,7 @@ def run_batch():
         print(f"  Target : {os.path.basename(target_path)}")
         print(f"{'='*60}")
 
-        delta_path  = os.path.join(OUTPUT, "delta.json")
+        delta_path  = os.path.join(OUTPUT, f"{label}_delta.json")
         report_path = os.path.join(OUTPUT, "report.json")
         md_path     = os.path.join(OUTPUT, f"{label}_change_report.md")
 
