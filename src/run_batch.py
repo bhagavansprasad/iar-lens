@@ -41,59 +41,59 @@ OUTPUT    = os.path.join(project_root, config.OUTPUT_DIR)
 PAIRS = [
     # {
     #     "label"  : "32-33",
-    #     "source" : os.path.join(FLOW_DUMP, "32-33", "FACTORYDOCK-TEST-32.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "32-33", "FACTORYDOCK-TEST-33.car"),
+    #     "source" : os.path.join(FLOW_DUMP, "32-33", "FACTORYDOCK-TEST-01.car"),
+    #     "target" : os.path.join(FLOW_DUMP, "32-33", "FACTORYDOCK-TEST-02.car"),
     # },
     # {
     #     "label"  : "34-35",
-    #     "source" : os.path.join(FLOW_DUMP, "34-35", "FACTORYDOCK-TEST-34.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "34-35", "FACTORYDOCK-TEST-35.car"),
+    #     "source" : os.path.join(FLOW_DUMP, "34-35", "FACTORYDOCK-TEST-01.car"),
+    #     "target" : os.path.join(FLOW_DUMP, "34-35", "FACTORYDOCK-TEST-02.car"),
     # },
-    # {
-    #     "label"  : "36-37",
-    #     "source" : os.path.join(FLOW_DUMP, "36-37", "FACTORYDOCK-TEST-36.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "36-37", "FACTORYDOCK-TEST-37.car"),
-    # },
+    {
+        "label"  : "36-37",
+        "source" : os.path.join(FLOW_DUMP, "36-37", "FACTORYDOCK-TEST-01.car"),
+        "target" : os.path.join(FLOW_DUMP, "36-37", "FACTORYDOCK-TEST-02.car"),
+    },
     # {
     #     "label"  : "39-40",
-    #     "source" : os.path.join(FLOW_DUMP, "39-40", "FACTORYDOCK-TEST-39.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "39-40", "FACTORYDOCK-TEST-40.car"),
+    #     "source" : os.path.join(FLOW_DUMP, "39-40", "FACTORYDOCK-TEST-01.car"),
+    #     "target" : os.path.join(FLOW_DUMP, "39-40", "FACTORYDOCK-TEST-02.car"),
     # },
     # {
     #     "label"  : "41-42",
-    #     "source" : os.path.join(FLOW_DUMP, "41-42", "FACTORYDOCK-TEST-41.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "41-42", "FACTORYDOCK-TEST-42.car"),
+    #     "source" : os.path.join(FLOW_DUMP, "41-42", "FACTORYDOCK-TEST-01.car"),
+    #     "target" : os.path.join(FLOW_DUMP, "41-42", "FACTORYDOCK-TEST-02.car"),
     # },
     # {
     #     "label"  : "45-46",
-    #     "source" : os.path.join(FLOW_DUMP, "45-46", "FACTORYDOCK-TEST-45.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "45-46", "FACTORYDOCK-TEST-46.car"),
+    #     "source" : os.path.join(FLOW_DUMP, "45-46", "FACTORYDOCK-TEST-01.car"),
+    #     "target" : os.path.join(FLOW_DUMP, "45-46", "FACTORYDOCK-TEST-02.car"),
     # },
     # {
     #     "label"  : "47-48",
-    #     "source" : os.path.join(FLOW_DUMP, "47-48", "FACTORYDOCK-TEST-47.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "47-48", "FACTORYDOCK-TEST-48.car"),
+    #     "source" : os.path.join(FLOW_DUMP, "47-48", "FACTORYDOCK-TEST-01.car"),
+    #     "target" : os.path.join(FLOW_DUMP, "47-48", "FACTORYDOCK-TEST-02.car"),
     # },
     # {
     #     "label"  : "49-50",
-    #     "source" : os.path.join(FLOW_DUMP, "49-50", "FACTORYDOCK-TEST-49.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "49-50", "FACTORYDOCK-TEST-50.car"),
+    #     "source" : os.path.join(FLOW_DUMP, "49-50", "FACTORYDOCK-TEST-01.car"),
+    #     "target" : os.path.join(FLOW_DUMP, "49-50", "FACTORYDOCK-TEST-02.car"),
     # },
     # {
     #     "label"  : "51-52",
-    #     "source" : os.path.join(FLOW_DUMP, "51-52", "FACTORYDOCK-TEST-51.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "51-52", "FACTORYDOCK-TEST-52.car"),
+    #     "source" : os.path.join(FLOW_DUMP, "51-52", "FACTORYDOCK-TEST-01.car"),
+    #     "target" : os.path.join(FLOW_DUMP, "51-52", "FACTORYDOCK-TEST-02.car"),
     # },
     # {
     #     "label"  : "53-54",
-    #     "source" : os.path.join(FLOW_DUMP, "53-54", "FACTORYDOCK-TEST-53.car"),
-    #     "target" : os.path.join(FLOW_DUMP, "53-54", "FACTORYDOCK-TEST-54.car"),
+    #     "source" : os.path.join(FLOW_DUMP, "53-54", "FACTORYDOCK-TEST-01.car"),
+    #     "target" : os.path.join(FLOW_DUMP, "53-54", "FACTORYDOCK-TEST-02.car"),
     # },
-    {
-        "label"  : "55-56",
-        "source" : os.path.join(FLOW_DUMP, "55-56", "INT03.00.0001.iar"),
-        "target" : os.path.join(FLOW_DUMP, "55-56", "INT03.00.0011.iar"),
-    },
+    # {
+    #     "label"  : "INT303",
+    #     "source" : os.path.join(FLOW_DUMP, "INT303_INVENTOR_EI_RECONCIL_03.00.0001.iar.zip"),
+    #     "target" : os.path.join(FLOW_DUMP, "INT303_INVENTOR_EI_RECONCIL_03.00.0011.iar.zip"),
+    # },
 ]
 
 # ---------------------------------------------------------------------------
@@ -123,6 +123,7 @@ def run_batch():
             config.SOURCE_IAR  = source_path
             config.TARGET_IAR  = target_path
             config.OUTPUT_DIR  = OUTPUT
+            config.LABEL       = label
             config.WORKSPACE_DIR = os.path.join(project_root, "workspace", label)
             run_comparison()
 

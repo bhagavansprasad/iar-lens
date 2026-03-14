@@ -1,10 +1,10 @@
 # ---------------------------------------------------------------------------
 # iar-lens | src/iar_agent_prompts.py
-# All Gemini prompts for the IAR Review Agent
+# All LLM prompts for the IAR Review Agent
 # ---------------------------------------------------------------------------
 
 import json
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -16,6 +16,9 @@ INVESTIGATE_PROCESSOR_PROMPT = """
 You are an Oracle Integration Cloud (OIC) integration architect reviewing changes between two versions of an IAR integration archive.
 
 You are investigating a specific processor step that is NEW or REMOVED in the newer version.
+
+## Integration Context
+{flow_context_section}
 
 ## Processor Details
 - Processor ID  : {processor_id}
@@ -31,7 +34,8 @@ You are investigating a specific processor step that is NEW or REMOVED in the ne
 {file_contents}
 
 ## Your Task
-Based on the files above, provide a concise technical analysis of this processor step.
+Based on the files above and the integration context, provide a concise technical analysis of this processor step.
+Use the integration context to give your analysis business meaning — explain how this step fits into the broader flow.
 
 Respond ONLY with a valid JSON object in this exact structure:
 {{
@@ -63,6 +67,9 @@ You have investigated all new and removed steps between two versions of an integ
 - Version From : {version_from}
 - Version To   : {version_to}
 
+## Flow Context (Phase 1b Analysis)
+{flow_context_section}
+
 ## Statistics
 {statistics}
 
@@ -77,6 +84,8 @@ You have investigated all new and removed steps between two versions of an integ
 
 ## Your Task
 Produce a final structured change report that an architect can use to approve or reject this integration change.
+Use the Flow Context section above to ground your summary and observations in business terms — the integration_purpose,
+change_narrative, flow_before and flow_after fields are your primary source for the business story.
 
 Respond ONLY with a valid JSON object in this exact structure:
 {{
@@ -111,6 +120,53 @@ Respond ONLY with a valid JSON object in this exact structure:
 
 
 # ---------------------------------------------------------------------------
+# Helper: format flow_context into a readable prompt section
+# ---------------------------------------------------------------------------
+
+def _format_flow_context_section(flow_context: Optional[Dict]) -> str:
+    """
+    Formats the flow_context dict into a readable section for prompt injection.
+    Returns a minimal placeholder if flow_context is None or empty.
+    """
+    if not flow_context:
+        return "  (flow context not available)"
+
+    lines = []
+
+    purpose = flow_context.get("integration_purpose", "")
+    if purpose:
+        lines.append(f"Integration Purpose:\n  {purpose}")
+
+    change_type = flow_context.get("change_type", "")
+    reason      = flow_context.get("change_type_reason", "")
+    if change_type:
+        lines.append(f"\nChange Type: {change_type}")
+        if reason:
+            lines.append(f"  Reason: {reason}")
+
+    narrative = flow_context.get("change_narrative", "")
+    if narrative:
+        lines.append(f"\nChange Narrative:\n  {narrative}")
+
+    flow_before = flow_context.get("flow_before", "")
+    flow_after  = flow_context.get("flow_after", "")
+    if flow_before:
+        lines.append(f"\nFlow Before:\n  {flow_before}")
+    if flow_after:
+        lines.append(f"\nFlow After:\n  {flow_after}")
+
+    si = flow_context.get("systems_involved", {})
+    added   = si.get("added", [])
+    removed = si.get("removed", [])
+    if added:
+        lines.append(f"\nAdapters Added   : {', '.join(added)}")
+    if removed:
+        lines.append(f"Adapters Removed : {', '.join(removed)}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Helpers to format prompts
 # ---------------------------------------------------------------------------
 
@@ -121,7 +177,8 @@ def format_investigate_prompt(
     status       : str,
     version      : str,
     files        : List[Dict],
-    file_contents: List[Dict]
+    file_contents: List[Dict],
+    flow_context : Optional[Dict] = None
 ) -> str:
     """Formats the INVESTIGATE_PROCESSOR_PROMPT with actual data."""
 
@@ -133,45 +190,48 @@ def format_investigate_prompt(
         )
     files_summary = "\n".join(files_summary_lines) if files_summary_lines else "  No files found"
 
-    # Build file contents section — include content with clear separators
+    # Build file contents section
     content_sections = []
     for fc in file_contents:
         if fc.get("success") and fc.get("content"):
             content_sections.append(
                 f"### {fc['file_name']} ({fc['file_type']})\n"
                 f"Role: {fc['file_role']}\n"
-                f"```\n{fc['content'][:2000]}\n```"  # cap at 2000 chars per file
+                f"```\n{fc['content'][:2000]}\n```"
             )
     file_contents_str = "\n\n".join(content_sections) if content_sections else "No file contents available"
 
     return INVESTIGATE_PROCESSOR_PROMPT.format(
-        processor_id  = processor_id,
-        step_name     = step_name,
-        step_type     = step_type,
-        status        = status,
-        version       = version,
-        files_summary = files_summary,
-        file_contents = file_contents_str
+        flow_context_section = _format_flow_context_section(flow_context),
+        processor_id         = processor_id,
+        step_name            = step_name,
+        step_type            = step_type,
+        status               = status,
+        version              = version,
+        files_summary        = files_summary,
+        file_contents        = file_contents_str
     )
 
 
 def format_synthesize_prompt(
-    integration   : str,
-    version_from  : str,
-    version_to    : str,
-    statistics    : Dict,
-    findings      : List[Dict],
-    shifted_steps : List[Dict],
-    unchanged_steps: List[Dict]
+    integration    : str,
+    version_from   : str,
+    version_to     : str,
+    statistics     : Dict,
+    findings       : List[Dict],
+    shifted_steps  : List[Dict],
+    unchanged_steps: List[Dict],
+    flow_context   : Optional[Dict] = None
 ) -> str:
     """Formats the SYNTHESIZE_REPORT_PROMPT with actual data."""
 
     return SYNTHESIZE_REPORT_PROMPT.format(
-        integration    = integration,
-        version_from   = version_from,
-        version_to     = version_to,
-        statistics     = json.dumps(statistics, indent=2),
-        findings       = json.dumps(findings, indent=2),
-        shifted_steps  = json.dumps(shifted_steps, indent=2),
-        unchanged_steps= json.dumps(unchanged_steps, indent=2)
+        integration          = integration,
+        version_from         = version_from,
+        version_to           = version_to,
+        flow_context_section = _format_flow_context_section(flow_context),
+        statistics           = json.dumps(statistics, indent=2),
+        findings             = json.dumps(findings, indent=2),
+        shifted_steps        = json.dumps(shifted_steps, indent=2),
+        unchanged_steps      = json.dumps(unchanged_steps, indent=2)
     )

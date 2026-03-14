@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # iar-lens | src/iar_agent.py
-# Phase 3 — LangGraph Investigator Agent
-# Reads processor files and produces a structured delta report using Gemini
+# Phase 2 — LangGraph Investigator Agent
+# Reads processor files and produces a structured delta report using an LLM
 # ---------------------------------------------------------------------------
 
 import os
@@ -28,23 +28,16 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Gemini helper
+# LLM helper
 # ---------------------------------------------------------------------------
 
-def _get_gemini_model():
-    """Configure and return a Gemini model instance."""
-    api_key = os.getenv(config.GEMINI_API_KEY_ENV)
-    if not api_key:
-        raise EnvironmentError(
-            f"Gemini API key not found. "
-            f"Set the '{config.GEMINI_API_KEY_ENV}' environment variable."
-        )
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(config.GEMINI_MODEL)
+def _get_gemini_client():
+    """Return an LLM client instance."""
+    return genai.Client()
 
 
 def _parse_llm_json(response_text: str) -> Dict | None:
-    """Extract and parse JSON from Gemini response."""
+    """Extract and parse JSON from LLM response."""
     json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
     if json_match:
         try:
@@ -60,13 +53,12 @@ def _parse_llm_json(response_text: str) -> Dict | None:
 
 async def init_node(state: IARReviewAgentState) -> IARReviewAgentState:
     """
-    Loads delta.json and initializes all working state fields.
+    Loads delta.json and <label>_flow_context.json, initializes all state fields.
     """
-    print("\n[INIT] Loading delta and initializing state...")
+    print("\n[INIT] Loading delta and flow context, initializing state...")
 
     delta_path = state.get("delta_path", config.OUTPUT_DIR + "delta.json")
-
-    resolved = os.path.abspath(
+    resolved   = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", delta_path)
     )
 
@@ -76,7 +68,7 @@ async def init_node(state: IARReviewAgentState) -> IARReviewAgentState:
     with open(resolved, "r", encoding="utf-8") as f:
         delta = json.load(f)
 
-    state["delta"]       = delta
+    state["delta"]        = delta
     state["version_from"] = delta.get("version_from", state.get("version_from", ""))
     state["version_to"]   = delta.get("version_to",   state.get("version_to", ""))
     state["integration"]  = delta.get("integration",  state.get("integration", ""))
@@ -92,6 +84,33 @@ async def init_node(state: IARReviewAgentState) -> IARReviewAgentState:
           f"Shifted: {delta['statistics']['positionally_shifted']} | "
           f"Unchanged: {delta['statistics']['unchanged_count']}")
 
+    # Load flow_context — try <label>_flow_context.json first, fall back to flow_context.json
+    output_dir  = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", config.OUTPUT_DIR)
+    )
+    label       = getattr(config, "LABEL", None)
+    fc_labelled = os.path.join(output_dir, f"{label}_flow_context.json") if label else None
+    fc_plain    = os.path.join(output_dir, "flow_context.json")
+
+    flow_context = None
+    fc_path_used = None
+
+    for candidate in filter(None, [fc_labelled, fc_plain]):
+        if os.path.exists(candidate):
+            with open(candidate, "r", encoding="utf-8") as f:
+                flow_context = json.load(f)
+            fc_path_used = candidate
+            break
+
+    if flow_context:
+        print(f"✅ Loaded flow context: {fc_path_used}")
+        print(f"   Change type : {flow_context.get('change_type', '?')}")
+        print(f"   Purpose     : {flow_context.get('integration_purpose', '')[:80]}...")
+    else:
+        print("⚠️  No flow_context.json found — agent will run without Phase 1b context")
+
+    state["flow_context"] = flow_context
+
     return state
 
 
@@ -103,14 +122,12 @@ async def build_reading_list_node(state: IARReviewAgentState) -> IARReviewAgentS
     """
     Pure Python node — builds a focused reading list of processors
     to investigate based on the delta (new + removed steps only).
-    Shifted and unchanged steps are excluded — no investigation needed.
     """
     print("\n[BUILD_READING_LIST] Building focused processor reading list...")
 
-    delta       = state["delta"]
+    delta        = state["delta"]
     reading_list = []
 
-    # New steps — investigate in target version
     for step in delta["delta"]["new_steps"]:
         reading_list.append({
             "processor_id": step["processor_id"],
@@ -121,7 +138,6 @@ async def build_reading_list_node(state: IARReviewAgentState) -> IARReviewAgentS
             "adapter_ref" : step.get("adapter_ref")
         })
 
-    # Removed steps — investigate in source version
     for step in delta["delta"]["removed_steps"]:
         reading_list.append({
             "processor_id": step["processor_id"],
@@ -151,13 +167,14 @@ async def investigate_node(state: IARReviewAgentState) -> IARReviewAgentState:
     For each processor in the reading list:
       1. List its files using file_reader
       2. Read each file's content
-      3. Send to Gemini for analysis
+      3. Send to LLM for analysis (with flow_context for richer understanding)
       4. Collect findings
     """
-    print("\n[INVESTIGATE] Investigating processors with Gemini...")
+    print("\n[INVESTIGATE] Investigating processors with LLM...")
 
-    model        = _get_gemini_model()
+    client       = _get_gemini_client()
     reading_list = state["reading_list"]
+    flow_context = state.get("flow_context")
     findings     = []
     all_files_read = []
 
@@ -170,8 +187,7 @@ async def investigate_node(state: IARReviewAgentState) -> IARReviewAgentState:
 
         print(f"\n   [{i}/{len(reading_list)}] {status} — {step_name} ({processor_id})")
 
-        # globalVariableDefinition steps never have processor files on disk in OIC —
-        # they are declared inline in project.xml only. Skip file lookup and describe generically.
+        # globalVariableDefinition steps have no processor files in OIC
         if step_type == "globalVariableDefinition":
             print(f"      ℹ️  Skipping file lookup — globalVariableDefinition has no processor files in OIC")
             findings.append({
@@ -187,21 +203,21 @@ async def investigate_node(state: IARReviewAgentState) -> IARReviewAgentState:
             })
             continue
 
-        # Step 1: List files for this processor
+        # List files for this processor
         file_list_result = list_processor_files(processor_id, version=version)
 
         if not file_list_result["success"]:
             logger.warning(f"No files found for {processor_id}: {file_list_result['error']}")
             findings.append({
-                "processor_id"   : processor_id,
-                "step_name"      : step_name,
-                "step_type"      : step_type,
-                "status"         : status,
-                "purpose"        : "Files not found — could not investigate",
-                "business_impact": "Unknown",
+                "processor_id"    : processor_id,
+                "step_name"       : step_name,
+                "step_type"       : step_type,
+                "status"          : status,
+                "purpose"         : "Files not found — could not investigate",
+                "business_impact" : "Unknown",
                 "technical_detail": file_list_result["error"],
-                "risk_level"     : "medium",
-                "risk_reason"    : "Unable to read processor files"
+                "risk_level"      : "medium",
+                "risk_reason"     : "Unable to read processor files"
             })
             continue
 
@@ -209,7 +225,7 @@ async def investigate_node(state: IARReviewAgentState) -> IARReviewAgentState:
         print(f"      Found {len(files)} file(s): "
               f"{[f['file_name'] for f in files]}")
 
-        # Step 2: Read file contents
+        # Read file contents
         file_contents = []
         for f in files:
             read_result = read_file(f["file_path"])
@@ -217,7 +233,7 @@ async def investigate_node(state: IARReviewAgentState) -> IARReviewAgentState:
                 file_contents.append(read_result)
                 all_files_read.append(read_result)
 
-        # Step 3: Send to Gemini for analysis
+        # Send to LLM — pass flow_context for richer analysis
         prompt = format_investigate_prompt(
             processor_id  = processor_id,
             step_name     = step_name,
@@ -225,43 +241,44 @@ async def investigate_node(state: IARReviewAgentState) -> IARReviewAgentState:
             status        = status,
             version       = version,
             files         = files,
-            file_contents = file_contents
+            file_contents = file_contents,
+            flow_context  = flow_context
         )
 
         try:
-            response      = model.generate_content(prompt)
+            response = client.models.generate_content(model=config.GEMINI_MODEL, contents=prompt)
             response_text = response.text.strip()
             finding       = _parse_llm_json(response_text)
 
             if finding:
-                print(f"      ✅ Gemini: {finding.get('purpose', 'No purpose extracted')[:80]}")
+                print(f"      ✅ LLM: {finding.get('purpose', 'No purpose extracted')[:80]}")
                 findings.append(finding)
             else:
-                logger.warning(f"Gemini returned no parseable JSON for {processor_id}")
+                logger.warning(f"LLM returned no parseable JSON for {processor_id}")
                 findings.append({
-                    "processor_id"   : processor_id,
-                    "step_name"      : step_name,
-                    "step_type"      : step_type,
-                    "status"         : status,
-                    "purpose"        : "Gemini analysis failed",
-                    "business_impact": "Unknown",
+                    "processor_id"    : processor_id,
+                    "step_name"       : step_name,
+                    "step_type"       : step_type,
+                    "status"          : status,
+                    "purpose"         : "LLM analysis failed",
+                    "business_impact" : "Unknown",
                     "technical_detail": response_text[:300],
-                    "risk_level"     : "medium",
-                    "risk_reason"    : "LLM response could not be parsed"
+                    "risk_level"      : "medium",
+                    "risk_reason"     : "LLM response could not be parsed"
                 })
 
         except Exception as e:
-            logger.error(f"Gemini call failed for {processor_id}: {e}")
+            logger.error(f"LLM call failed for {processor_id}: {e}")
             findings.append({
-                "processor_id"   : processor_id,
-                "step_name"      : step_name,
-                "step_type"      : step_type,
-                "status"         : status,
-                "purpose"        : f"Error during investigation: {str(e)}",
-                "business_impact": "Unknown",
+                "processor_id"    : processor_id,
+                "step_name"       : step_name,
+                "step_type"       : step_type,
+                "status"          : status,
+                "purpose"         : f"Error during investigation: {str(e)}",
+                "business_impact" : "Unknown",
                 "technical_detail": str(e),
-                "risk_level"     : "medium",
-                "risk_reason"    : "Investigation error"
+                "risk_level"      : "medium",
+                "risk_reason"     : "Investigation error"
             })
 
     state["findings"]   = findings
@@ -279,68 +296,72 @@ async def investigate_node(state: IARReviewAgentState) -> IARReviewAgentState:
 
 async def synthesize_node(state: IARReviewAgentState) -> IARReviewAgentState:
     """
-    Sends all findings to Gemini to produce the final structured
-    delta report with overall risk, recommendation, and plain English summary.
+    Sends all findings + flow_context to LLM to produce the final
+    structured delta report with overall risk, recommendation, and summary.
     """
-    print("\n[SYNTHESIZE] Generating final report with Gemini...")
+    print("\n[SYNTHESIZE] Generating final report with LLM...")
 
-    model    = _get_gemini_model()
-    delta    = state["delta"]
-    findings = state["findings"]
+    client       = _get_gemini_client()
+    delta        = state["delta"]
+    findings     = state["findings"]
+    flow_context = state.get("flow_context")
 
     prompt = format_synthesize_prompt(
-        integration    = state["integration"],
-        version_from   = state["version_from"],
-        version_to     = state["version_to"],
-        statistics     = delta["statistics"],
-        findings       = findings,
-        shifted_steps  = delta["delta"]["positionally_shifted"],
-        unchanged_steps= delta["delta"]["unchanged_steps"]
+        integration     = state["integration"],
+        version_from    = state["version_from"],
+        version_to      = state["version_to"],
+        statistics      = delta["statistics"],
+        findings        = findings,
+        shifted_steps   = delta["delta"]["positionally_shifted"],
+        unchanged_steps = delta["delta"]["unchanged_steps"],
+        flow_context    = flow_context
     )
 
     try:
-        response      = model.generate_content(prompt)
+        response = client.models.generate_content(model=config.GEMINI_MODEL, contents=prompt)
         response_text = response.text.strip()
         report        = _parse_llm_json(response_text)
 
         if not report:
-            logger.error("Gemini synthesis returned no parseable JSON")
+            logger.error("LLM synthesis returned no parseable JSON")
             report = {
-                "integration" : state["integration"],
-                "version_from": state["version_from"],
-                "version_to"  : state["version_to"],
-                "overall_risk": "unknown",
-                "recommendation": "manual_review_required",
-                "summary"     : "Automated synthesis failed — manual review required.",
-                "new_steps"   : [],
-                "removed_steps": [],
+                "integration"    : state["integration"],
+                "version_from"   : state["version_from"],
+                "version_to"     : state["version_to"],
+                "overall_risk"   : "unknown",
+                "recommendation" : "manual_review_required",
+                "summary"        : "Automated synthesis failed — manual review required.",
+                "new_steps"      : [],
+                "removed_steps"  : [],
                 "key_observations": ["Synthesis failed — raw findings available in agent state"],
-                "conditions"  : []
+                "conditions"     : []
             }
 
     except Exception as e:
-        logger.error(f"Gemini synthesis failed: {e}")
+        logger.error(f"LLM synthesis failed: {e}")
         report = {
-            "integration" : state["integration"],
-            "version_from": state["version_from"],
-            "version_to"  : state["version_to"],
-            "overall_risk": "unknown",
-            "recommendation": "manual_review_required",
-            "summary"     : f"Synthesis error: {str(e)}",
-            "new_steps"   : [],
-            "removed_steps": [],
+            "integration"    : state["integration"],
+            "version_from"   : state["version_from"],
+            "version_to"     : state["version_to"],
+            "overall_risk"   : "unknown",
+            "recommendation" : "manual_review_required",
+            "summary"        : f"Synthesis error: {str(e)}",
+            "new_steps"      : [],
+            "removed_steps"  : [],
             "key_observations": [],
-            "conditions"  : []
+            "conditions"     : []
         }
 
     # Add metadata
-    report["generated_at"]  = datetime.now(timezone.utc).isoformat()
-    report["files_read"]    = len(state["files_read"])
-    report["processors_investigated"] = len(state["findings"])
+    report["generated_at"]             = datetime.now(timezone.utc).isoformat()
+    report["files_read"]               = len(state["files_read"])
+    report["processors_investigated"]  = len(state["findings"])
 
-    # Write final report to output
+    # Write <label>_report.json
+    label    = getattr(config, "LABEL", None)
+    filename = f"{label}_report.json" if label else "report.json"
     output_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", config.OUTPUT_DIR, "report.json")
+        os.path.join(os.path.dirname(__file__), "..", config.OUTPUT_DIR, filename)
     )
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
@@ -348,10 +369,10 @@ async def synthesize_node(state: IARReviewAgentState) -> IARReviewAgentState:
     state["final_report"] = report
 
     print(f"\n✅ Final report generated")
-    print(f"   Overall risk    : {report.get('overall_risk', 'N/A').upper()}")
-    print(f"   Recommendation  : {report.get('recommendation', 'N/A')}")
-    print(f"   Summary         : {report.get('summary', '')[:120]}...")
-    print(f"   Output written  : {output_path}")
+    print(f"   Overall risk   : {report.get('overall_risk', 'N/A').upper()}")
+    print(f"   Recommendation : {report.get('recommendation', 'N/A')}")
+    print(f"   Summary        : {report.get('summary', '')[:120]}...")
+    print(f"   Output written : {output_path}")
 
     return state
 
@@ -366,21 +387,18 @@ def create_iar_review_agent_graph():
 
     workflow = StateGraph(IARReviewAgentState)
 
-    # Add nodes
-    workflow.add_node("INIT",              init_node)
+    workflow.add_node("INIT",               init_node)
     workflow.add_node("BUILD_READING_LIST", build_reading_list_node)
-    workflow.add_node("INVESTIGATE",       investigate_node)
-    workflow.add_node("SYNTHESIZE",        synthesize_node)
+    workflow.add_node("INVESTIGATE",        investigate_node)
+    workflow.add_node("SYNTHESIZE",         synthesize_node)
 
-    # Sequential flow
-    workflow.add_edge(START,               "INIT")
-    workflow.add_edge("INIT",              "BUILD_READING_LIST")
-    workflow.add_edge("BUILD_READING_LIST","INVESTIGATE")
-    workflow.add_edge("INVESTIGATE",       "SYNTHESIZE")
-    workflow.add_edge("SYNTHESIZE",         END)
+    workflow.add_edge(START,                "INIT")
+    workflow.add_edge("INIT",               "BUILD_READING_LIST")
+    workflow.add_edge("BUILD_READING_LIST", "INVESTIGATE")
+    workflow.add_edge("INVESTIGATE",        "SYNTHESIZE")
+    workflow.add_edge("SYNTHESIZE",          END)
 
     app = workflow.compile()
-
     print("✅ IAR Review Agent compiled\n")
     return app
 
@@ -400,13 +418,19 @@ async def run_agent():
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
+    # Silence noisy third-party loggers
+    logging.getLogger("google_genai").setLevel(logging.WARNING)
+    logging.getLogger("google_genai._api_client").setLevel(logging.WARNING)
+    logging.getLogger("google_genai.models").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     initial_state = IARReviewAgentState(
         delta_path   = config.OUTPUT_DIR + "delta.json",
-        version_from = "",   # will be populated from delta.json in INIT
+        version_from = "",
         version_to   = "",
         integration  = "",
         delta        = None,
+        flow_context = None,
         reading_list = None,
         files_read   = None,
         findings     = None,
@@ -421,8 +445,9 @@ async def run_agent():
     print(f"Integration  : {result['integration']}")
     print(f"From → To    : v{result['version_from']} → v{result['version_to']}")
     print(f"Findings     : {len(result['findings'])}")
-    print(f"Files read   : {len(result['files_read'])}")
-    print(f"Report       : output/report.json")
+    label = getattr(config, "LABEL", None)
+    rname = f"{label}_report.json" if label else "report.json"
+    print(f"   Report       : output/{rname}")
     print("=" * 60)
 
     return result
