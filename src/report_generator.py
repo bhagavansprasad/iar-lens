@@ -206,7 +206,9 @@ def _infer_block_label(block: list, status: str) -> str:
 def _node(step: dict, style: str) -> str:
     name  = step["name"].replace('"', "")
     stype = step.get("type", "").replace('"', "")
-    return f'[{name}<br/>{stype}]:::{style}'
+    short = name[:14] + "…" if len(name) > 14 else name
+    styp  = stype[:14] + "…" if len(stype) > 14 else stype
+    return f'[{short}<br/>{styp}]:::{style}'
 
 
 def _build_window(full_sequence: list, positions: list, status: str) -> str:
@@ -248,8 +250,37 @@ def _build_window(full_sequence: list, positions: list, status: str) -> str:
             "    classDef ctx fill:#e8e8e8,stroke:#aaa,color:#444"
         )
 
-    lines = ["```mermaid", "flowchart LR"] + node_defs + edges + [classdef, "```"]
-    return "\n".join(lines)
+    import math
+
+    def _balanced_row_size(total: int) -> int:
+        if total <= 12:
+            return total
+        best_size, best_diff = 12, total
+        for size in range(8, 13):
+            num_rows = math.ceil(total / size)
+            last_row = total - (num_rows - 1) * size
+            diff     = abs(size - last_row)
+            if diff < best_diff:
+                best_diff = diff
+                best_size = size
+        return best_size
+
+    row_size = _balanced_row_size(len(node_ids))
+    rows     = [node_ids[i:i+row_size] for i in range(0, len(node_ids), row_size)]
+
+    if len(rows) == 1:
+        # Single row — original simple diagram
+        lines = ["```mermaid", "flowchart LR"] + node_defs + edges + [classdef, "```"]
+        return "\n".join(lines)
+
+    # Multiple rows — one Mermaid block per row
+    parts = []
+    nd_map = {nid: nd for nid, nd in zip(node_ids, node_defs)}
+    for r, row in enumerate(rows):
+        row_defs  = [nd_map[nid] for nid in row]
+        row_edges = [f"    {row[i]} --> {row[i+1]}" for i in range(len(row)-1)]
+        parts += ["```mermaid", "flowchart LR"] + row_defs + row_edges + [classdef, "```", ""]
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +326,7 @@ def _build_header(delta: dict, report: dict) -> str:
 
 ---
 
-## 1. Header
+## §1§ Header
 
 | Field | Value |
 |---|---|
@@ -343,7 +374,7 @@ def _build_what_it_does(flow_context: dict) -> str:
     return f"""
 ---
 
-## 2. What This Integration Does
+## §2§ What This Integration Does
 
 {purpose}{adapters_line}{change_type_line}"""
 
@@ -360,7 +391,7 @@ def _build_what_changed(flow_context: dict) -> str:
     if not any([flow_before, flow_after, change_narrative]):
         return ""
 
-    parts = ["\n---\n\n## 3. What Changed\n"]
+    parts = ["\n---\n\n## §3§ What Changed\n"]
 
     if change_narrative:
         parts.append(f"**Summary of Change:**\n{change_narrative}\n")
@@ -373,6 +404,126 @@ def _build_what_changed(flow_context: dict) -> str:
 
     return "\n".join(parts)
 
+
+
+def _build_full_flow_diagram(delta: dict) -> str:
+    """
+    Section 4 — Before/After Full Flow Diagram.
+    Renders two Mermaid flowcharts (source then target) with colour coding:
+      - 🟢 green  = new step (target only)
+      - 🔴 red    = removed step (source only)
+      - ⚪ grey   = unchanged or positionally shifted
+    Adapter names are shown on invoke steps via [-> AdapterName] annotation.
+    Steps are capped at MAX_NODES to keep diagrams readable.
+    """
+    MAX_NODES = 200  # high cap — balanced row sizing handles readability
+
+    CLASSDEF = (
+        "    classDef new     fill:#ccffcc,stroke:#008800,color:#004400\n"
+        "    classDef removed fill:#ffcccc,stroke:#cc0000,color:#800000\n"
+        "    classDef ctx     fill:#e8e8e8,stroke:#aaa,color:#444"
+    )
+
+    def _label(name: str, stype: str, adapter: str = None) -> str:
+        """Build a compact fixed-width node label for consistent sizing."""
+        short      = name[:14] + "…" if len(name) > 14 else name
+        anno_text  = f"→ {adapter}" if adapter else stype
+        anno_short = anno_text[:14] + "…" if len(anno_text) > 14 else anno_text
+        return f'[{short}<br/>{anno_short}]'
+
+    def _diagram(steps: list, changed_names: set, change_style: str, version: str, title: str) -> str:
+        """
+        Renders multiple flowchart LR blocks with balanced row sizes (8-12 nodes).
+        Row size is chosen so all rows are as equal as possible — last row
+        is never much shorter than the others.
+        """
+        import math
+
+        def _balanced_row_size(total: int) -> int:
+            if total <= 12:
+                return total
+            best_size, best_diff = 12, total
+            for size in range(8, 13):
+                num_rows = math.ceil(total / size)
+                last_row = total - (num_rows - 1) * size
+                diff     = abs(size - last_row)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_size = size
+            return best_size
+
+        capped  = steps[:MAX_NODES]
+        omitted = len(steps) - len(capped)
+        if omitted:
+            capped.append({"name": f"… {omitted} more", "type": "", "adapter_ref": None})
+
+        row_size = _balanced_row_size(len(capped))
+        rows     = [capped[i:i+row_size] for i in range(0, len(capped), row_size)]
+
+        parts = [f"**{title} ({version})**", ""]
+
+        for r, row in enumerate(rows):
+            node_defs = []
+            real_ids  = []
+
+            for i, s in enumerate(row):
+                nid     = f"N{r}_{i}"
+                style   = change_style if s["name"] in changed_names else "ctx"
+                adapter = s.get("adapter_ref")
+                real_ids.append(nid)
+                node_defs.append(f'    {nid}{_label(s["name"], s["type"], adapter)}:::{style}')
+
+            edges = [f"    {real_ids[i]} --> {real_ids[i+1]}" for i in range(len(real_ids)-1)]
+
+            block = ["```mermaid", "flowchart LR"] + node_defs + edges + [CLASSDEF, "```"]
+            parts.extend(block)
+            parts.append("")
+
+        return "\n".join(parts)
+
+
+    # Build source sequence — unchanged + shifted (at source pos) + removed
+    new_names     = {s["name"] for s in delta["delta"]["new_steps"]}
+    removed_names = {s["name"] for s in delta["delta"]["removed_steps"]}
+
+    source_steps = _build_source_sequence(delta)
+    # Attach adapter_ref for removed steps
+    removed_adapter = {s["name"]: s.get("adapter_ref") for s in delta["delta"]["removed_steps"]}
+    for s in source_steps:
+        if s["name"] in removed_adapter:
+            s["adapter_ref"] = removed_adapter[s["name"]]
+
+    target_steps = _build_target_sequence(delta)
+    # Attach adapter_ref for new steps
+    new_adapter = {s["name"]: s.get("adapter_ref") for s in delta["delta"]["new_steps"]}
+    for s in target_steps:
+        if s["name"] in new_adapter:
+            s["adapter_ref"] = new_adapter[s["name"]]
+
+    version_from = delta.get("version_from", "source")
+    version_to   = delta.get("version_to",   "target")
+
+    source_diagram = _diagram(
+        steps         = source_steps,
+        changed_names = removed_names,
+        change_style  = "removed",
+        version       = version_from,
+        title         = "Before"
+    )
+    target_diagram = _diagram(
+        steps         = target_steps,
+        changed_names = new_names,
+        change_style  = "new",
+        version       = version_to,
+        title         = "After"
+    )
+
+    has_changes = bool(new_names or removed_names)
+    if not has_changes:
+        note = "> ℹ️ No structural changes — both versions have identical flow."
+        return f"\n---\n\n## §4§ Before → After Flow Diagram\n\n{note}"
+
+    return f"\n---\n\n## §4§ Before → After Flow Diagram\n\n{source_diagram}\n\n---\n\n{target_diagram}"
 
 def _build_executive_summary(report: dict, delta: dict) -> str:
     stats        = delta.get("statistics", {})
@@ -397,17 +548,19 @@ def _build_executive_summary(report: dict, delta: dict) -> str:
         f"- **{s['step_name']}** ({s['step_type']}) — {_trim_purpose(s.get('purpose',''))}"
         for s in new_steps
     )
+    added_section = f"**What Was Added:**\n{added_lines}\n\n" if added_lines else ""
 
     # What was removed — trimmed one-liners
     removed_lines = "\n".join(
         f"- **{s['step_name']}** ({s['step_type']}) — {_trim_purpose(s.get('purpose',''))}"
         for s in removed_steps
     )
+    removed_section = f"**What Was Removed:**\n{removed_lines}\n" if removed_lines else ""
 
     return f"""
 ---
 
-## 4. Executive Summary
+## §5§ Executive Summary
 
 | Field | Value |
 |---|---|
@@ -417,11 +570,7 @@ def _build_executive_summary(report: dict, delta: dict) -> str:
 **What Changed:**
 {what_changed}
 
-**What Was Added:**
-{added_lines}
-
-**What Was Removed:**
-{removed_lines}"""
+{added_section}{removed_section}"""
 
 
 def _build_statistics(delta: dict) -> str:
@@ -429,7 +578,7 @@ def _build_statistics(delta: dict) -> str:
     return f"""
 ---
 
-## 5. Statistics
+## §6§ Statistics
 
 | Metric | Count |
 |---|---|
@@ -446,7 +595,7 @@ def _build_legend() -> str:
     return """
 ---
 
-## 6. Legend
+## §7§ Legend
 
 | Style | Meaning |
 |---|---|
@@ -465,7 +614,9 @@ def _build_new_steps(delta: dict, report: dict) -> tuple:
     target_sequence  = _build_target_sequence(delta)
 
     blocks    = _group_consecutive(new_steps_delta)
-    sections  = ["\n---\n\n## 7. New Steps"]
+    if not delta.get("delta", {}).get("new_steps"):
+        return "", 1, 1
+    sections  = ["\n---\n\n## §8§ New Steps"]
     step_num  = 1
     block_num = 1
 
@@ -504,7 +655,9 @@ def _build_removed_steps(delta: dict, report: dict, start_step: int, start_block
     source_sequence      = _build_source_sequence(delta)
 
     blocks    = _group_consecutive(removed_steps_delta)
-    sections  = ["\n---\n\n## 8. Removed Steps"]
+    if not delta.get("delta", {}).get("removed_steps"):
+        return ""
+    sections  = ["\n---\n\n## §9§ Removed Steps"]
     step_num  = start_step
     block_num = start_block
 
@@ -545,7 +698,7 @@ def _build_removed_steps(delta: dict, report: dict, start_step: int, start_block
 
 def _build_observations(report: dict) -> str:
     observations = report.get("key_observations", [])
-    lines = ["\n---\n\n## 9. Key Observations\n"]
+    lines = ["\n---\n\n## §10§ Key Observations\n"]
     for i, obs in enumerate(observations, 1):
         lines.append(f"{i}. {obs}")
     return "\n".join(lines)
@@ -553,7 +706,14 @@ def _build_observations(report: dict) -> str:
 
 def _build_conditions(report: dict) -> str:
     conditions = report.get("conditions", [])
-    lines = ["\n---\n\n## 10. Approval Conditions\n"]
+    lines = ["\n---\n\n## §11§ Approval Conditions\n"]
+    if not conditions:
+        lines.append("No approval conditions — change is approved as-is.")
+        lines.append(
+            "\n---\n\n"
+            "*Generated by **iar-lens** — Hybrid Python + LLM IAR Change Review Tool*"
+        )
+        return "\n".join(lines)
     lines.append("| # | Condition | Risk |")
     lines.append("|---|---|---|")
     for i, cond in enumerate(conditions, 1):
@@ -564,7 +724,7 @@ def _build_conditions(report: dict) -> str:
         lines.append(f"| {i} | {cond} | {risk} |")
     lines.append(
         "\n---\n\n"
-        "*Generated by **iar-lens** — Hybrid Python + Gemini IAR Change Review Tool*"
+        "*Generated by **iar-lens** — Hybrid Python + LLM IAR Change Review Tool*"
     )
     return "\n".join(lines)
 
@@ -652,6 +812,7 @@ def generate_report(
         _build_header(delta, report),
         _build_what_it_does(flow_context),
         _build_what_changed(flow_context),
+        _build_full_flow_diagram(delta),
         _build_executive_summary(report, delta),
         _build_statistics(delta),
         _build_legend(),
@@ -662,6 +823,15 @@ def generate_report(
     ] if s]
 
     md_content = "\n".join(sections)
+
+    # Renumber sections dynamically — placeholders §N§ get replaced
+    # with sequential numbers based on which sections are present
+    import re as _re
+    section_num = [0]
+    def _renumber(m):
+        section_num[0] += 1
+        return f"## {section_num[0]}."
+    md_content = _re.sub(r"## §\d+§", _renumber, md_content)
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(md_content)
