@@ -19,6 +19,7 @@ class IARReviewAgentState(TypedDict):
     # Working state — built and consumed internally by nodes
     # -----------------------------------------------------------------------
     delta              : Optional[Dict[str, Any]]   # loaded delta.json content
+    flow_context       : Optional[Dict[str, Any]]   # loaded <label>_flow_context.json (Phase 1b)
     reading_list       : Optional[List[Dict]]       # processors to investigate
     files_read         : Optional[List[Dict]]       # all files read so far
     findings           : Optional[List[Dict]]       # per-processor findings

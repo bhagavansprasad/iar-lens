@@ -3,7 +3,7 @@
 # Phase 1b — Flow Understander
 #
 # Takes the full extracted flow data for both source and target versions
-# and calls Gemini to produce a rich flow_context.json that describes:
+# and calls an LLM to produce a rich flow_context.json that describes:
 #   - What the integration does (business purpose)
 #   - The logical blocks / stages in each version
 #   - What external systems / adapters are involved
@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Prompt — systems_involved is intentionally excluded from what Gemini
+# Prompt — systems_involved is intentionally excluded from what the LLM
 # is asked to produce. It is computed in Python from raw applications data
-# and merged back after the LLM call. This avoids Gemini truncating the
+# and merged back after the LLM call. This avoids LLM truncation of the
 # adapter list, which was observed when it was LLM-generated.
 # ---------------------------------------------------------------------------
 
@@ -111,7 +111,7 @@ this exact structure:
 def _compute_systems_involved(source_apps: list, target_apps: list) -> dict:
     """
     Computes systems_involved entirely in Python from raw applications lists.
-    Avoids relying on Gemini to enumerate adapters, which caused truncation.
+    Avoids relying on the LLM to enumerate adapters, which caused truncation.
     Returns dict with keys: source, target, added, removed.
     """
     def adapter_names(apps: list) -> list:
@@ -197,7 +197,7 @@ def understand_flow(
     label        : str = None
 ) -> dict:
     """
-    Calls Gemini with the full flow context of both versions and produces
+    Calls the LLM with the full flow context of both versions and produces
     <label>_flow_context.json (or flow_context.json if no label) in output_dir.
 
     Args:
@@ -215,7 +215,7 @@ def understand_flow(
     """
     import google.genai as genai
 
-    logger.info("Phase 1b - Flow Understander: calling Gemini...")
+    logger.info("Phase 1b - Flow Understander: calling LLM...")
 
     # Build NEW / REMOVED marker sets
     new_names     = {s["name"] for s in delta["new_steps"]}
@@ -234,7 +234,7 @@ def understand_flow(
         applications  = target_data["applications"]
     )
 
-    # Compute systems_involved in Python — do NOT ask Gemini
+    # Compute systems_involved in Python — do NOT ask the LLM
     systems_involved = _compute_systems_involved(
         source_apps = source_data["applications"],
         target_apps = target_data["applications"]
@@ -250,19 +250,13 @@ def understand_flow(
         target_flow     = target_flow_str,
     )
 
-    # Call Gemini
-    api_key = os.getenv(config.GEMINI_API_KEY_ENV)
-    if not api_key:
-        raise EnvironmentError(
-            f"Gemini API key not found. Set '{config.GEMINI_API_KEY_ENV}'."
-        )
-    genai.configure(api_key=api_key)
-    model    = genai.GenerativeModel(config.GEMINI_MODEL)
-    response = model.generate_content(prompt)
+    # Call LLM
+    client   = genai.Client()
+    response = client.models.generate_content(model=config.GEMINI_MODEL, contents=prompt)
     context  = _parse_llm_json(response.text.strip())
 
     if not context:
-        logger.error("Flow Understander: Gemini returned no parseable JSON")
+        logger.error("Flow Understander: LLM returned no parseable JSON")
         context = {
             "integration_purpose"  : "Could not determine - LLM parse failed.",
             "logical_blocks_source": [],
