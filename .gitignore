@@ -2,7 +2,6 @@ __pycache__
 workspace/
 output/
 *.pyc
-flow-dump
 .vscode/
 flow-dump.rar
 docs/iar_lens_contextv1.md

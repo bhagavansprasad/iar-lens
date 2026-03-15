@@ -1,0 +1,1 @@
+42IPLA changes, removed mapping for Currency
