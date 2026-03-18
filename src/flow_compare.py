@@ -1,6 +1,14 @@
 # ---------------------------------------------------------------------------
-# iar-lens | src/flow_compare.py
-# Responsible for: parsing project.xml and computing flow step delta
+# oic-lens | src/flow_compare.py
+# Step 1 — Parse project.xml and compute structural delta.
+#
+# M1: new_steps + removed_steps (by processor_id)
+# M2: modified_steps added (file-level content diff)
+#
+# Processor naming priority (per master plan):
+#   1. <ns2:processorName>  if present
+#   2. orchestration element name= attr  if present  (none seen in practice)
+#   3. {Type}_{numeric_id}  e.g. Router_964
 # ---------------------------------------------------------------------------
 
 import xml.etree.ElementTree as ET
@@ -8,319 +16,246 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# XML namespaces used in OIC project.xml
-NS = {
-    "ns3": "http://www.oracle.com/2014/03/ics/project",
-    "ns2": "http://www.oracle.com/2014/03/ics/flow/definition",
-    "ns" : "http://www.oracle.com/2014/03/ics/project/definition"
-}
+NS2 = "http://www.oracle.com/2014/03/ics/flow/definition"
+NS3 = "http://www.oracle.com/2014/03/ics/project"
+NSM = "http://www.oracle.com/2014/03/ics/project/definition"   # metadata fields
 
-# Step types to skip — infrastructure/boilerplate, not meaningful business steps
-SKIP_TYPES = {"messageTracker", "integrationMetadata", "typeDefinitions"}
+# Processor types excluded from delta — infrastructure, not flow steps
+SKIP_TYPES = {"integrationMetadata", "messageTracker", "globalVariableDefinition"}
 
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def extract_steps(project_xml_path: str) -> dict:
     """
-    Parses project.xml and extracts:
-      - Integration metadata (name, version)
-      - Ordered list of flow steps (processors)
-      - Registered adapter applications
+    Parse a project.xml and return structured metadata.
 
-    Args:
-        project_xml_path: full path to project.xml
-
-    Returns:
-        dict with keys:
-            - integration_name   : project code
-            - version            : project version
-            - steps              : ordered list of step dicts
-            - applications       : list of registered adapters
-            - success            : True/False
-            - error              : error message if failed
+    Returns dict with keys:
+        integration_code, integration_version, integration_name,
+        applications, processors, processor_count, success, error
     """
     result = {
-        "integration_name": None,
-        "version": None,
-        "steps": [],
-        "applications": [],
-        "success": False,
-        "error": None
+        "integration_code":    None,
+        "integration_version": None,
+        "integration_name":    None,
+        "applications":        [],
+        "processors":          [],
+        "processor_count":     0,
+        "success":             False,
+        "error":               None,
     }
 
     try:
         tree = ET.parse(project_xml_path)
         root = tree.getroot()
     except ET.ParseError as e:
-        result["error"] = f"Failed to parse project.xml: {str(e)}"
+        result["error"] = f"XML parse error: {e}"
+        logger.error(result["error"])
+        return result
+    except FileNotFoundError:
+        result["error"] = f"project.xml not found: {project_xml_path}"
         logger.error(result["error"])
         return result
 
-    # Extract integration metadata
-    result["integration_name"] = _get_text(root, "projectCode")
-    result["version"]          = _get_text(root, "projectVersion")
+    # Integration metadata — fields are in the /definition sub-namespace
+    result["integration_code"]    = root.findtext(f"{{{NSM}}}projectCode")    or ""
+    result["integration_version"] = root.findtext(f"{{{NSM}}}projectVersion") or ""
+    result["integration_name"]    = root.findtext(f"{{{NSM}}}projectName")    or ""
 
-    logger.info(f"Parsing: {result['integration_name']} v{result['version']}")
+    # Applications (external connections)
+    result["applications"] = _parse_applications(root)
 
-    # Extract adapter applications (connections used in the flow)
-    applications = []
-    for app in root.iter("{http://www.oracle.com/2014/03/ics/flow/definition}application"):
-        adapter_name = app.find("ns2:adapter/ns2:name", NS)
-        adapter_code = app.find("ns2:adapter/ns2:code", NS)
-        adapter_type = app.find("ns2:adapter/ns2:type", NS)
-        role         = app.find("ns2:role", NS)
+    # Processors — build name lookup from orchestration, then ordered list
+    orchestration = root.find(f".//{{{NS2}}}orchestration")
+    seq_names = _build_seq_name_map(orchestration) if orchestration is not None else {}
 
-        applications.append({
-            "app_id"      : app.get("name"),
-            "adapter_name": adapter_name.text if adapter_name is not None else None,
-            "adapter_code": adapter_code.text if adapter_code is not None else None,
-            "adapter_type": adapter_type.text if adapter_type is not None else None,
-            "role"        : role.text if role is not None else None
-        })
+    raw_processors = root.findall(f".//{{{NS2}}}processor")
+    ordered = _build_ordered_list(raw_processors, seq_names)
 
-    result["applications"] = applications
-    logger.info(f"Found {len(applications)} adapter applications")
+    result["processors"]      = ordered
+    result["processor_count"] = len(ordered)
+    result["success"]         = True
 
-    # Extract ordered flow steps (processors)
-    steps = []
-    position = 1
-
-    for processor in root.iter("{http://www.oracle.com/2014/03/ics/flow/definition}processor"):
-        processor_id   = processor.get("name")
-        step_type_elem = processor.find("ns2:type", NS)
-        step_type      = step_type_elem.text if step_type_elem is not None else "unknown"
-
-        # Skip infrastructure boilerplate steps
-        if step_type in SKIP_TYPES:
-            continue
-
-        # Get human-readable processor name if available
-        proc_name_elem = processor.find("ns2:processorName", NS)
-        proc_name      = proc_name_elem.text if proc_name_elem is not None else None
-
-        # Try to find referenced adapter application name for invoke steps
-        ref_app = _find_referenced_app(processor, applications)
-
-        steps.append({
-            "position"    : position,
-            "processor_id": processor_id,
-            "type"        : step_type,
-            "name"        : proc_name or ref_app or _infer_name(step_type, processor_id),
-            "adapter_ref" : ref_app
-        })
-
-        position += 1
-
-    result["steps"] = steps
-    result["success"] = True
-
-    logger.info(f"Extracted {len(steps)} flow steps")
+    logger.info(
+        f"Extracted: {result['integration_code']} v{result['integration_version']} "
+        f"— {result['processor_count']} flow processors"
+    )
     return result
 
 
 def compute_delta(source_data: dict, target_data: dict) -> dict:
     """
-    Compares two extracted flow step sequences and computes the delta.
+    Compare source (old) and target (new) extract_steps() results.
 
-    Uses Longest Common Subsequence (LCS) to correctly distinguish between:
-      - Genuinely reordered steps (relative order changed)
-      - Positionally shifted steps (same relative order, pushed by insertions)
-
-    Args:
-        source_data: result from extract_steps() for the older version
-        target_data: result from extract_steps() for the newer version
-
-    Returns:
-        dict with keys:
-            - new_steps           : steps in target but not in source
-            - removed_steps       : steps in source but not in target
-            - reordered_steps     : steps in both but with changed relative order
-            - positionally_shifted: steps in both, same relative order, different absolute position
-            - unchanged_steps     : steps in both at exact same absolute position
+    Returns dict with keys:
+        source_version, target_version, source_count, target_count,
+        new_steps, removed_steps, modified_steps, positionally_shifted
     """
-    source_steps = source_data["steps"]
-    target_steps = target_data["steps"]
+    source_map = {p["processor_id"]: p for p in source_data["processors"]}
+    target_map = {p["processor_id"]: p for p in target_data["processors"]}
 
-    source_by_name = {s["name"]: s for s in source_steps}
-    target_by_name = {s["name"]: s for s in target_steps}
+    source_ids = set(source_map.keys())
+    target_ids = set(target_map.keys())
 
-    source_names_set = set(source_by_name.keys())
-    target_names_set = set(target_by_name.keys())
+    new_ids     = target_ids - source_ids
+    removed_ids = source_ids - target_ids
+    common_ids  = source_ids & target_ids
 
-    # Ordered name sequences for LCS (only common steps)
-    common_names = source_names_set & target_names_set
-    source_seq = [s["name"] for s in source_steps if s["name"] in common_names]
-    target_seq = [s["name"] for s in target_steps if s["name"] in common_names]
+    new_steps     = [target_map[pid] for pid in sorted(new_ids,     key=_numeric_id)]
+    removed_steps = [source_map[pid] for pid in sorted(removed_ids, key=_numeric_id)]
 
-    # Compute LCS — steps that maintained their relative order in both versions
-    lcs_set = _lcs(source_seq, target_seq)
+    # Positionally shifted: common ids whose relative order changed (LCS backbone)
+    shifted = _find_shifted(source_data["processors"], target_data["processors"], common_ids)
 
-    # New steps — in target but not in source
-    new_step_names = target_names_set - source_names_set
-    new_steps = sorted([
-        {
-            "name"        : target_by_name[n]["name"],
-            "type"        : target_by_name[n]["type"],
-            "position"    : target_by_name[n]["position"],
-            "processor_id": target_by_name[n]["processor_id"],
-            "adapter_ref" : target_by_name[n]["adapter_ref"]
-        }
-        for n in new_step_names
-    ], key=lambda x: x["position"])
-
-    # Removed steps — in source but not in target
-    removed_step_names = source_names_set - target_names_set
-    removed_steps = sorted([
-        {
-            "name"        : source_by_name[n]["name"],
-            "type"        : source_by_name[n]["type"],
-            "position"    : source_by_name[n]["position"],
-            "processor_id": source_by_name[n]["processor_id"],
-            "adapter_ref" : source_by_name[n]["adapter_ref"]
-        }
-        for n in removed_step_names
-    ], key=lambda x: x["position"])
-
-    # Classify common steps using LCS
-    reordered_steps     = []
-    positionally_shifted = []
-    unchanged_steps     = []
-
-    for name in common_names:
-        src = source_by_name[name]
-        tgt = target_by_name[name]
-
-        if name in lcs_set:
-            # Relative order is preserved
-            if src["position"] == tgt["position"]:
-                # Absolute position also same — truly unchanged
-                unchanged_steps.append({
-                    "name"    : name,
-                    "type"    : tgt["type"],
-                    "position": tgt["position"]
-                })
-            else:
-                # Absolute position changed only due to insertions/removals above
-                positionally_shifted.append({
-                    "name"          : name,
-                    "type"          : tgt["type"],
-                    "position_from" : src["position"],
-                    "position_to"   : tgt["position"],
-                    "shift"         : tgt["position"] - src["position"]
-                })
-        else:
-            # Relative order changed — genuinely reordered
-            reordered_steps.append({
-                "name"             : name,
-                "type"             : tgt["type"],
-                "position_from"    : src["position"],
-                "position_to"      : tgt["position"],
-                "processor_id_from": src["processor_id"],
-                "processor_id_to"  : tgt["processor_id"]
-            })
-
-    # Sort all lists by position for readability
-    reordered_steps.sort(key=lambda x: x["position_to"])
-    positionally_shifted.sort(key=lambda x: x["position_to"])
-    unchanged_steps.sort(key=lambda x: x["position"])
+    delta = {
+        "source_version":       source_data["integration_version"],
+        "target_version":       target_data["integration_version"],
+        "source_count":         source_data["processor_count"],
+        "target_count":         target_data["processor_count"],
+        "new_steps":            new_steps,
+        "removed_steps":        removed_steps,
+        "modified_steps":       [],   # populated in M2
+        "positionally_shifted": shifted,
+    }
 
     logger.info(
-        f"Delta — New: {len(new_steps)} | "
-        f"Removed: {len(removed_steps)} | "
-        f"Reordered: {len(reordered_steps)} | "
-        f"Shifted: {len(positionally_shifted)} | "
-        f"Unchanged: {len(unchanged_steps)}"
+        f"Delta: {len(new_steps)} new, {len(removed_steps)} removed, "
+        f"{len(shifted)} shifted  "
+        f"(v{delta['source_version']} -> v{delta['target_version']})"
     )
-
-    return {
-        "new_steps"           : new_steps,
-        "removed_steps"       : removed_steps,
-        "reordered_steps"     : reordered_steps,
-        "positionally_shifted": positionally_shifted,
-        "unchanged_steps"     : unchanged_steps
-    }
+    return delta
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _lcs(source_names: list, target_names: list) -> set:
-    """
-    Computes the Longest Common Subsequence of two name sequences.
-    Returns the set of names whose relative order is preserved in both.
+def _parse_applications(root) -> list:
+    apps = []
+    for app in root.findall(f".//{{{NS2}}}application"):
+        role    = app.findtext(f"{{{NS2}}}role") or ""
+        adapter = app.find(f"{{{NS2}}}adapter")
+        code    = adapter.findtext(f"{{{NS2}}}code") if adapter is not None else ""
+        name    = adapter.findtext(f"{{{NS2}}}name") if adapter is not None else ""
+        operation = ""
+        for direction in ("inbound", "outbound"):
+            op = app.findtext(f".//{{{NS2}}}{direction}/{{{NS2}}}operation")
+            if op:
+                operation = op
+                break
+        apps.append({
+            "role":      role,
+            "code":      code or "",
+            "name":      name or "",
+            "operation": operation,
+        })
+    return apps
 
-    This is the key to distinguishing genuine reordering from positional
-    shifts caused by insertions or removals above a step.
+
+def _build_seq_name_map(orchestration) -> dict:
     """
-    m, n = len(source_names), len(target_names)
+    Walk orchestration tree; return {processor_id: name} for any sequence
+    element that has both refUri=processor_xxx AND a name= attribute.
+    In practice this is always empty for this integration type, but kept per spec.
+    """
+    seq_names = {}
+    for el in orchestration.iter():
+        ref  = el.get("refUri")
+        name = el.get("name")
+        if ref and ref.startswith("processor_") and "/" not in ref and name:
+            seq_names[ref] = name
+    return seq_names
+
+
+def _build_ordered_list(raw_processors: list, seq_names: dict) -> list:
+    """Build filtered, named processor list in XML document order."""
+    ordered = []
+    for pos, p in enumerate(raw_processors):
+        pid   = p.get("name")
+        ptype = p.findtext(f"{{{NS2}}}type") or "unknown"
+
+        if ptype in SKIP_TYPES:
+            continue
+
+        # Naming priority: processorName > seq name attr > type_id fallback
+        pname = (
+            p.findtext(f"{{{NS2}}}processorName")
+            or seq_names.get(pid)
+            or _fallback_name(pid, ptype)
+        )
+
+        ordered.append({
+            "processor_id": pid,
+            "type":         ptype,
+            "name":         pname,
+            "position":     pos,
+        })
+
+    return ordered
+
+
+def _fallback_name(processor_id: str, ptype: str) -> str:
+    numeric    = processor_id.replace("processor_", "")
+    type_label = _type_display(ptype)
+    return f"{type_label}_{numeric}"
+
+
+def _type_display(ptype: str) -> str:
+    labels = {
+        "assignment":          "Assign",
+        "transformer":         "Map",
+        "contentBasedRouter":  "Router",
+        "notification":        "Notify",
+        "for":                 "ForEach",
+        "while":               "While",
+        "catch":               "Catch",
+        "catchAll":            "CatchAll",
+        "stitch":              "Stitch",
+        "wait":                "Wait",
+        "activityStreamLogger":"Logger",
+    }
+    return labels.get(ptype, ptype.capitalize())
+
+
+def _numeric_id(processor_id: str) -> int:
+    try:
+        return int(processor_id.replace("processor_", ""))
+    except ValueError:
+        return 0
+
+
+def _find_shifted(source_procs: list, target_procs: list, common_ids: set) -> list:
+    """
+    LCS on common processor IDs (document order) to find the stable backbone.
+    Processors in common_ids but NOT in the LCS = positionally shifted.
+    """
+    src_ids = [p["processor_id"] for p in source_procs if p["processor_id"] in common_ids]
+    tgt_ids = [p["processor_id"] for p in target_procs if p["processor_id"] in common_ids]
+    lcs_ids = set(_lcs(src_ids, tgt_ids))
+    return [p for p in target_procs if p["processor_id"] in common_ids and p["processor_id"] not in lcs_ids]
+
+
+def _lcs(a: list, b: list) -> list:
+    """Standard LCS returning the common subsequence as a list."""
+    m, n = len(a), len(b)
     dp = [[0] * (n + 1) for _ in range(m + 1)]
-
     for i in range(1, m + 1):
         for j in range(1, n + 1):
-            if source_names[i-1] == target_names[j-1]:
+            if a[i-1] == b[j-1]:
                 dp[i][j] = dp[i-1][j-1] + 1
             else:
                 dp[i][j] = max(dp[i-1][j], dp[i][j-1])
-
-    # Backtrack to recover the LCS names
-    lcs = []
+    result = []
     i, j = m, n
     while i > 0 and j > 0:
-        if source_names[i-1] == target_names[j-1]:
-            lcs.append(source_names[i-1])
+        if a[i-1] == b[j-1]:
+            result.append(a[i-1])
             i -= 1
             j -= 1
-        elif dp[i-1][j] > dp[i][j-1]:
+        elif dp[i-1][j] >= dp[i][j-1]:
             i -= 1
         else:
             j -= 1
-
-    return set(lcs)
-
-def _get_text(root, tag: str) -> str | None:
-    """
-    Finds a direct child tag and returns its text.
-    Tries default namespace first, then no namespace.
-    """
-    DEFAULT_NS = "http://www.oracle.com/2014/03/ics/project/definition"
-    elem = root.find(f"{{{DEFAULT_NS}}}{tag}")
-    if elem is None:
-        elem = root.find(tag)
-    return elem.text if elem is not None else None
-
-
-def _find_referenced_app(processor, applications: list) -> str | None:
-    """
-    Tries to find an adapter name referenced by a processor.
-    Looks for invoke/target references in the processor block.
-    """
-    # For invoke-type processors, the adapter reference is in nested invoke elements
-    for app in applications:
-        app_id = app["app_id"]
-        # Check if this processor references the application by searching raw attribs
-        proc_str = ET.tostring(processor, encoding="unicode")
-        if app_id and app_id in proc_str:
-            return app["adapter_name"]
-    return None
-
-
-def _infer_name(step_type: str, processor_id: str) -> str:
-    """
-    Fallback name inference when no processorName is available.
-    Produces a readable label from type + id.
-    """
-    type_labels = {
-        "assignment"        : "Assign",
-        "transformer"       : "Transform",
-        "for"               : "ForEach",
-        "stageFile"         : "StageFile",
-        "notification"      : "Notify",
-        "catchAll"          : "CatchAll",
-        "contentBasedRouter": "Router",
-        "scheduleReceive"   : "ScheduleTrigger",
-        "target"            : "Invoke",
-    }
-    label = type_labels.get(step_type, step_type)
-    # Extract numeric suffix from processor_id for uniqueness
-    num = processor_id.replace("processor_", "")
-    return f"{label}_{num}"
+    return result[::-1]
