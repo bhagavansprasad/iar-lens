@@ -100,8 +100,12 @@ def run_comparison(label=None, source_path=None, target_path=None):
     if not target_data["success"]:
         raise RuntimeError(f"Target parse failed: {target_data['error']}")
 
-    # --- Delta ---
-    delta = compute_delta(source_data, target_data)
+    # --- Delta (M1 + M2: pass extract paths so file diff runs) ---
+    delta = compute_delta(
+        source_data, target_data,
+        source_extract_path=src_extract["extract_path"],
+        target_extract_path=tgt_extract["extract_path"],
+    )
 
     # Attach paths so downstream steps (M2+) can find workspace files
     delta["label"]                = label

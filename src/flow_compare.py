@@ -13,6 +13,13 @@
 
 import xml.etree.ElementTree as ET
 import logging
+import os
+import sys
+
+# Allow importing file_diff from the same src/ directory
+_src_dir = os.path.dirname(__file__)
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +92,17 @@ def extract_steps(project_xml_path: str) -> dict:
     return result
 
 
-def compute_delta(source_data: dict, target_data: dict) -> dict:
+def compute_delta(
+    source_data: dict,
+    target_data: dict,
+    source_extract_path: str = None,
+    target_extract_path: str = None,
+) -> dict:
     """
     Compare source (old) and target (new) extract_steps() results.
+
+    When source_extract_path and target_extract_path are provided (M2+),
+    also computes modified_steps via file-level content diff.
 
     Returns dict with keys:
         source_version, target_version, source_count, target_count,
@@ -109,6 +124,14 @@ def compute_delta(source_data: dict, target_data: dict) -> dict:
     # Positionally shifted: common ids whose relative order changed (LCS backbone)
     shifted = _find_shifted(source_data["processors"], target_data["processors"], common_ids)
 
+    # M2: Modified steps — requires extract paths
+    modified_steps = []
+    if source_extract_path and target_extract_path and common_ids:
+        modified_steps = _compute_modified_steps(
+            source_extract_path, target_extract_path,
+            common_ids, source_map, target_map,
+        )
+
     delta = {
         "source_version":       source_data["integration_version"],
         "target_version":       target_data["integration_version"],
@@ -116,16 +139,52 @@ def compute_delta(source_data: dict, target_data: dict) -> dict:
         "target_count":         target_data["processor_count"],
         "new_steps":            new_steps,
         "removed_steps":        removed_steps,
-        "modified_steps":       [],   # populated in M2
+        "modified_steps":       modified_steps,
         "positionally_shifted": shifted,
     }
 
     logger.info(
         f"Delta: {len(new_steps)} new, {len(removed_steps)} removed, "
-        f"{len(shifted)} shifted  "
+        f"{len(modified_steps)} modified, {len(shifted)} shifted  "
         f"(v{delta['source_version']} -> v{delta['target_version']})"
     )
     return delta
+
+
+def _compute_modified_steps(
+    source_extract_path: str,
+    target_extract_path: str,
+    common_ids: set,
+    source_map: dict,
+    target_map: dict,
+) -> list:
+    """
+    Call file_diff.detect_modified() for all common processor IDs.
+    Uses target processor metadata (name/type) for the output records.
+    """
+    try:
+        import file_diff
+    except ImportError:
+        logger.warning("file_diff not available — modified_steps will be empty")
+        return []
+
+    src_resources = file_diff.find_resources_dir(source_extract_path)
+    tgt_resources = file_diff.find_resources_dir(target_extract_path)
+
+    if not src_resources:
+        logger.warning(f"resources/ dir not found in source: {source_extract_path}")
+        return []
+    if not tgt_resources:
+        logger.warning(f"resources/ dir not found in target: {target_extract_path}")
+        return []
+
+    # Processor metadata: prefer target, fall back to source
+    processor_meta = {}
+    for pid in common_ids:
+        meta = target_map.get(pid) or source_map.get(pid) or {}
+        processor_meta[pid] = meta
+
+    return file_diff.detect_modified(src_resources, tgt_resources, common_ids, processor_meta)
 
 
 # ---------------------------------------------------------------------------
