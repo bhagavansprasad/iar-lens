@@ -255,6 +255,17 @@ GROUND_TRUTH_STRUCTURAL = {
         "new_ids":        set(),
         "removed_ids":    set(),
     },
+    "51-52": {
+        "source_count":   None,   # not yet verified
+        "target_count":   None,
+        "new_count":      6,
+        "removed_count":  0,
+        "new_ids": {
+            "processor_1505", "processor_1528", "processor_1533",
+            "processor_1558", "processor_1563", "processor_1587",
+        },
+        "removed_ids": set(),
+    },
     "55-56": {
         "source_count":   35,
         "target_count":   42,

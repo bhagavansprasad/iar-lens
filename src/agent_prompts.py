@@ -143,6 +143,13 @@ You have investigated all changed processors between two versions of an integrat
 Produce a final structured change report that an architect can use to approve or reject this change.
 Ground your summary in business terms using the Integration Context above.
 
+CRITICAL RULES:
+- new_steps array MUST contain exactly one entry per finding with status=NEW — do NOT collapse or summarise
+- removed_steps array MUST contain exactly one entry per finding with status=REMOVED
+- modified_steps array MUST contain exactly one entry per finding with status=MODIFIED
+- If statistics says new_steps_count=6, your new_steps array must have exactly 6 entries
+- Every finding in the findings list above must appear in the appropriate array
+
 Respond ONLY with a valid JSON object — no preamble, no markdown fences:
 
 {{

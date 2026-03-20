@@ -610,6 +610,32 @@ async def synthesize_node(state: AgentState) -> AgentState:
             ).strip()
             logger.info(f"  Risk floor applied in report: {step.get('step_name')} low -> medium")
 
+    # Enforce count integrity — LLM sometimes collapses multiple findings into one.
+    # If the report arrays are shorter than findings, backfill from findings directly.
+    def _backfill(report_key: str, status: str):
+        report_entries  = report.get(report_key, [])
+        finding_entries = [f for f in findings if f.get("status", "").upper() == status]
+        if len(report_entries) < len(finding_entries):
+            logger.warning(
+                f"SYNTHESIZE truncated {report_key}: "
+                f"report={len(report_entries)}, findings={len(finding_entries)} — backfilling"
+            )
+            report[report_key] = [
+                {
+                    "step_name"      : f.get("step_name", f.get("processor_id", "?")),
+                    "step_type"      : f.get("step_type", "?"),
+                    "purpose"        : f.get("purpose", ""),
+                    "business_impact": f.get("business_impact", ""),
+                    "risk_level"     : f.get("risk_level", "low"),
+                    "what_changed"   : f.get("what_changed", ""),
+                }
+                for f in finding_entries
+            ]
+
+    _backfill("new_steps",      "NEW")
+    _backfill("removed_steps",  "REMOVED")
+    _backfill("modified_steps", "MODIFIED")
+
     # Metadata
     report["generated_at"]            = datetime.now(timezone.utc).isoformat()
     report["files_read"]              = len(state.get("files_read", []))

@@ -47,6 +47,14 @@ PAIRS = {
         "modified_processor" : "processor_1216",
         "modified_keyword"   : "Phone Number",
     },
+    "51-52": {
+        "label"              : "51-52",
+        "expected_new_count" : 6,
+        "expected_removed"   : 0,
+        "expected_modified"  : 0,
+        "modified_processor" : None,
+        "modified_keyword"   : None,
+    },
     "55-56": {
         "label"              : "55-56",
         "expected_new_count" : 15,
