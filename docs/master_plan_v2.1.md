@@ -629,7 +629,38 @@ The generated package contains:
 - Should CHUNK_SIZE=5 be configurable in config.py?
 
 ### Exact next action
-Write `src/report_generator.py` per M5 spec.
-Report section order: Header, What This Integration Does, What Changed, Full Flow Diagram (Mermaid), Executive Summary, Statistics, New Steps, Modified Steps (before/after table), Removed Steps, Key Observations, Architect Review Checklist, Approval Conditions.
-Salvage from old `src/report_generator.py`: `_trim_purpose`, `_trim_impact`, Mermaid generation.
-Test: change_report.md has Modified Steps section + Checklist with processor_964.
+Write `src/report_generator.py` per M5 spec. Build section by section, validate readability at each step.
+
+**Section build order:**
+1. Header + What This Integration Does + What Changed (narrative sections first — validate readability)
+2. Full Flow Diagram (Mermaid — salvage from existing)
+3. Executive Summary + Statistics
+4. New Steps + Removed Steps (salvage from existing)
+5. Modified Steps ⭐ (NEW — before/after table per changed file, navigation path)
+6. Key Observations + Architect Review Checklist ⭐ (NEW) + Approval Conditions
+
+**Modified Steps section format (per step):**
+- Step name + type + risk badge
+- File changed + navigation path (processor_id → output_id → filename)
+- Before/after table showing old value → new value
+- What changed (plain English) + business impact
+
+**Architect Review Checklist format:**
+- `- [ ] Router_964 (contentBasedRouter) — verify retry cap of 11 is correct threshold`
+- `  Navigate: processor_964 → output_966 → expr.properties`
+- One item per modified step + one per high-risk new/removed step
+
+**Salvage from existing `src/report_generator.py`:**
+- `_trim_purpose`, `_trim_impact` — keep as-is
+- Mermaid generation (`_build_full_flow_diagram`) — keep as-is
+- `§N§` dynamic section numbering — keep as-is
+- `_risk()`, `_rec_icon()` helpers — keep as-is
+
+**Human readability requirements (from original requirements):**
+- Business people must understand without OIC knowledge
+- Node names must be meaningful (not Notification1 — say "Notification for Shipping Manager")
+- Navigation paths so architect can reach the node in OIC
+- Before/after values explicit — not just "condition changed"
+- Plain English narrative throughout
+
+**Test:** change_report.md has Modified Steps section showing processor_964 before/after + Checklist with processor_964 navigation.
