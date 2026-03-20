@@ -388,11 +388,18 @@ def _run_investigation_batch(
             config   = genai_types.GenerateContentConfig(tools=TOOL_DECLARATIONS),
         )
 
-        contents.append(response.candidates[0].content)
+        # Guard: empty candidates = safety filter or quota error — skip turn
+        if not response.candidates or not response.candidates[0].content:
+            logger.warning(f"[{batch_label}] Turn {turn}: empty response (safety filter or quota) — skipping")
+            break
 
+        candidate_content = response.candidates[0].content
+        contents.append(candidate_content)
+
+        parts = candidate_content.parts or []
         function_calls = [
             part.function_call
-            for part in response.candidates[0].content.parts
+            for part in parts
             if part.function_call
         ]
 
@@ -400,8 +407,8 @@ def _run_investigation_batch(
             logger.warning(f"[{batch_label}] LLM stopped without finish_investigation — "
                            "attempting to parse findings from final response")
             text = "".join(
-                part.text for part in response.candidates[0].content.parts
-                if hasattr(part, "text")
+                part.text for part in parts
+                if hasattr(part, "text") and part.text
             )
             parsed = _parse_llm_json(text)
             if parsed and "findings" in parsed:
