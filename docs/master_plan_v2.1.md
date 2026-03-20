@@ -3,6 +3,7 @@
 **Last updated:** March 2026
 **Purpose:** Single source of truth for oic-lens. Paste this entire file at
 the start of every new Claude window.
+**Public Repository:** https://github.com/bhagavansprasad/oic-lens.git
 
 ---
 
@@ -569,24 +570,18 @@ The generated package contains:
 
 ### Completed milestones
 - M0 ✅ — Project bootstrap
-- M1 ✅ — Structural delta, 137/137 tests passing
+- M1 ✅ — Structural delta, 67/67 tests passing
+- M2 ✅ — Modified steps detection, 29/29 tests passing
+- M3 ✅ — Flow understander, 23/23 tests passing, 69/69 full regression
 
 ### Current milestone
-**M2 — Modified Steps Detection — IN DESIGN**
+**M4 — Agent Investigation — PENDING**
 
 ### Current branch
-`feature/m2-modified-steps`
-
-### Current file states
-- `src/file_diff.py` — draft exists, needs full rewrite per M2 spec above
-- `src/flow_compare.py` — compute_delta() signature updated for extract paths
-- `tools/capture_context.py` — built and tested
-- `oic_resource_file_reference.md` — v2.0 complete, in project root
+`feature/m4-agent-investigation`
 
 ### Open questions
-None — all design decisions for M2 are resolved.
+_Update this section manually before saving._
 
 ### Exact next action
-Write `src/file_diff.py` from scratch per the M2 spec above.
-Then write `tests/test_m2_modified_steps.py`.
-Produce code locally for review — do not push to repo.
+Rewrite src/agent.py, src/agent_state.py, src/agent_prompts.py per M4 spec. Check existing files first — they may have salvageable scaffolding like M3 did.
