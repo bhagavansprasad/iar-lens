@@ -263,9 +263,9 @@ Organised by pipeline step and milestone.
 
 | Check | Expected | Milestone | Status |
 |---|---|---|---|
-| report.json contains modified_steps section | Yes | M4 | ⬜ PENDING |
-| report.json describes processor_964 condition change | Yes | M4 | ⬜ PENDING |
-| report.json assigns risk to processor_964 | medium minimum | M4 | ⬜ PENDING |
+| report.json contains modified_steps section | Yes | M4 | ✅ PASS |
+| report.json describes processor_964 condition change | Yes | M4 | ✅ PASS |
+| report.json assigns risk to processor_964 | medium minimum | M4 | ✅ PASS |
 
 ### Step 3 — Report Generation
 
@@ -364,7 +364,7 @@ Repo created, reused files copied, extractor smoke test passing.
 
 ---
 
-### M4 — Agent Investigation ⬜ PENDING
+### M4 — Agent Investigation ✅ DONE
 **Step 2:** LangGraph agent
 
 `src/agent_state.py` — `modified_steps` as first-class field
@@ -539,6 +539,36 @@ The 74→82 figure in original master plan counted infrastructure processor
 types (`integrationMetadata`, `messageTracker`, `globalVariableDefinition`).
 These carry no business logic. Correct flow processor count is 71→79.
 
+**M4: LLM-driven investigation adopted at M4, not deferred to M7** (March 2026)
+Two approaches were considered — Python-driven (Python decides which files to
+read, feeds everything to LLM at once) vs LLM-driven (LLM receives inventory
+upfront, requests files on demand). LLM-driven was adopted at M4 because the
+richer reasoning flows directly into M5 report quality. Retrofitting in M7
+would mean M5 is built on weaker foundations. The complexity is a one-time cost.
+
+**M4: `finish_investigation` as loop termination signal** (March 2026)
+The INVESTIGATE node runs a multi-turn tool-use loop. The LLM calls
+`finish_investigation(findings_json)` to signal it is done and submit all
+findings as a JSON list. This is cleaner than parsing LLM text mid-loop or
+relying on the absence of tool calls. Safety cap: max_turns=50.
+
+**M4: BUILD_INVENTORY is pure Python** (March 2026)
+Assembles the structured inventory map (new/removed/modified processors + file
+lists + changed_files snippets) before the LLM is invoked. No LLM cost.
+LLM receives the complete map at the start of INVESTIGATE and uses it to
+plan its investigation and decide which files to read.
+
+**M4: Modified steps include diff snippets in inventory** (March 2026)
+For modified processors, the inventory already contains the changed_files
+before/after content snippets. The LLM can read full files on demand if
+needed, but has enough context to reason about the change from the snippet
+alone. This reduces unnecessary tool calls for simple changes.
+
+**M4: Risk floor medium for modified steps** (March 2026)
+Enforced in the INVESTIGATE prompt: "a silent logic change is NEVER low risk".
+Modified steps can only be rated medium or high. This ensures processor_964-
+style silent routing condition changes are never dismissed as low risk.
+
 ---
 
 ## Context Capture Process (End of Every Milestone)
@@ -573,15 +603,33 @@ The generated package contains:
 - M1 ✅ — Structural delta, 67/67 tests passing
 - M2 ✅ — Modified steps detection, 29/29 tests passing
 - M3 ✅ — Flow understander, 23/23 tests passing, 69/69 full regression
+- M4 ✅ — Agent investigation, 32-33: 17/17, 49-50: 14/14, 55-56: 14/14
 
 ### Current milestone
-**M4 — Agent Investigation — PENDING**
+**M5 — Report Generator — PENDING**
 
 ### Current branch
-`feature/m4-agent-investigation`
+`feature/m5-report-generator`
+
+### Current file states
+- `src/agent_state.py` — ✅ done
+- `src/agent_prompts.py` — ✅ done
+- `src/agent.py` — ✅ done. LLM-driven, 3-category investigation, chunked batches (CHUNK_SIZE=5), risk floor enforced in both investigate_node and synthesize_node.
+- `tests/test_m4_agent.py` — ✅ done
+
+### Design decisions made this session
+- **LLM-driven over Python-driven** — adopted at M4. LLM receives full inventory upfront, calls `read_processor_files` on demand. Richer reasoning flows into M5 report quality.
+- **`finish_investigation` as termination signal** — LLM calls once with all findings as JSON. Cleaner than parsing LLM text mid-loop.
+- **BUILD_INVENTORY is pure Python** — assembles structured map (new/removed/modified + file lists + changed_files snippets). No LLM cost.
+- **Modified steps include diff snippets in inventory** — LLM sees before/after content upfront. Reduces unnecessary tool calls.
+- **Risk floor medium for modified steps** — enforced in Python post-processing in both investigate_node and synthesize_node. Prompt-only enforcement is insufficient.
+- **Chunked batching (CHUNK_SIZE=5)** — large diffs (55-56: 33 processors) caused LLM to submit empty findings. Chunking into groups of 5 per LLM call fixes this. Small diffs (32-33, 49-50) unaffected.
 
 ### Open questions
-_Update this section manually before saving._
+- Should CHUNK_SIZE=5 be configurable in config.py?
 
 ### Exact next action
-Rewrite src/agent.py, src/agent_state.py, src/agent_prompts.py per M4 spec. Check existing files first — they may have salvageable scaffolding like M3 did.
+Write `src/report_generator.py` per M5 spec.
+Report section order: Header, What This Integration Does, What Changed, Full Flow Diagram (Mermaid), Executive Summary, Statistics, New Steps, Modified Steps (before/after table), Removed Steps, Key Observations, Architect Review Checklist, Approval Conditions.
+Salvage from old `src/report_generator.py`: `_trim_purpose`, `_trim_impact`, Mermaid generation.
+Test: change_report.md has Modified Steps section + Checklist with processor_964.
