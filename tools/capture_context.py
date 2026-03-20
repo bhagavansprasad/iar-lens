@@ -40,7 +40,7 @@ OUTPUT_DIR   = os.path.join(project_root, "output")
 SRC_DIR      = os.path.join(project_root, "src")
 TESTS_DIR    = os.path.join(project_root, "tests")
 TOOLS_DIR    = os.path.join(project_root, "tools")
-RESOURCE_REF = os.path.join(project_root, "oic_resource_file_reference.md")
+RESOURCE_REF = os.path.join(project_root, "docs", "oic_resource_file_reference.md")
 
 # ---------------------------------------------------------------------------
 # Milestone metadata
@@ -81,28 +81,31 @@ MILESTONE_META = {
     "M3": {
         "title":          "Flow Understander",
         "pipeline_step":  "Step 1: Extract and Diff",
-        "status":         "PENDING",
-        "files_built":    ["src/flow_understander.py"],
+        "status":         "DONE",
+        "files_built":    ["src/flow_understander.py",
+                           "tests/test_m3_flow_understander.py"],
         "files_modified": [],
-        "test_file":      None,
+        "test_file":      "tests/test_m3_flow_understander.py",
         "next_milestone": "M4",
     },
     "M4": {
         "title":          "Agent Investigation",
         "pipeline_step":  "Step 2: Agent Investigation",
-        "status":         "PENDING",
-        "files_built":    ["src/agent_state.py", "src/agent_prompts.py", "src/agent.py"],
+        "status":         "DONE",
+        "files_built":    ["src/agent_state.py", "src/agent_prompts.py",
+                           "src/agent.py", "tests/test_m4_agent.py"],
         "files_modified": [],
-        "test_file":      None,
+        "test_file":      "tests/test_m4_agent.py",
         "next_milestone": "M5",
     },
     "M5": {
         "title":          "Report Generator",
         "pipeline_step":  "Step 3: Report Generation",
-        "status":         "PENDING",
-        "files_built":    ["src/report_generator.py"],
+        "status":         "IN PROGRESS",
+        "files_built":    ["src/report_generator.py",
+                           "tests/test_m5_report.py"],
         "files_modified": [],
-        "test_file":      None,
+        "test_file":      "tests/test_m5_report.py",
         "next_milestone": "M6",
     },
     "M6": {
@@ -381,7 +384,15 @@ def run_validation(milestone: str, label: str) -> list:
         delta_path   = os.path.join(OUTPUT_DIR, f"{pair}_delta.json")
         context_path = os.path.join(OUTPUT_DIR, f"{pair}_flow_context.json")
         report_path  = os.path.join(OUTPUT_DIR, f"{pair}_report.json")
-        md_path      = os.path.join(OUTPUT_DIR, f"{pair}_change_report.md")
+        # change_report.md filename includes integration name + versions
+        # e.g. ALTERA_CREATE_SO_INTEGRAT_01.00.0032_to_01.00.0033_change_report.md
+        # Fall back to pair_change_report.md for simpler naming
+        import glob as _glob
+        _md_candidates = (
+            _glob.glob(os.path.join(OUTPUT_DIR, f"*{pair}*change_report.md")) +
+            _glob.glob(os.path.join(OUTPUT_DIR, "*change_report.md"))
+        )
+        md_path = _md_candidates[0] if _md_candidates else os.path.join(OUTPUT_DIR, f"{pair}_change_report.md")
 
         delta   = _load_json(delta_path)
         context = _load_json(context_path)
@@ -584,8 +595,31 @@ def run_validation(milestone: str, label: str) -> list:
                 results.append({
                     "check":  f"{prefix} Step 3 | has Architect Review Checklist",
                     "pass":   "architect" in md_lower and "checklist" in md_lower,
-                    "detail": "'architect checklist' in report",
+                    "detail": "'architect' and 'checklist' in report",
                 })
+                # processor_964 canonical checks (32-33 only)
+                if pair == "32-33":
+                    results.append({
+                        "check":  f"{prefix} Step 3 | processor_964 in Modified Steps",
+                        "pass":   "router_964" in md_lower or "processor_964" in md_lower,
+                        "detail": "processor_964 or Router_964 in report",
+                    })
+                    results.append({
+                        "check":  f"{prefix} Step 3 | varCount in Modified Steps",
+                        "pass":   "varcount" in md_lower,
+                        "detail": "varCount in report",
+                    })
+                    results.append({
+                        "check":  f"{prefix} Step 3 | processor_964 in checklist",
+                        "pass":   ("router_964" in md_lower or "processor_964" in md_lower)
+                                  and ("checklist" in md_lower or "- [ ]" in md_text),
+                        "detail": "processor_964 + checklist items present",
+                    })
+                    results.append({
+                        "check":  f"{prefix} Step 3 | navigation path present",
+                        "pass":   "navigate" in md_lower or "processor_964" in md_lower,
+                        "detail": "navigation hint in report",
+                    })
 
         # ── M6 end-to-end checks ─────────────────────────────────────────────
         if milestone == "M6":
