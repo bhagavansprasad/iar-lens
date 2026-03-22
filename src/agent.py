@@ -148,17 +148,32 @@ def finish_investigation(findings_json: str) -> str:
     Returns:
         Confirmation string.
     """
+    # findings_json may arrive as:
+    #   (a) a raw JSON string  — when LLM passes a string argument
+    #   (b) a dict/proto Struct — when Gemini native function calling deserialises it
+    #   (c) a list             — when LLM passes a plain list
     try:
-        data = json.loads(findings_json)
-        findings = data.get("findings", [])
-    except (json.JSONDecodeError, AttributeError):
-        # LLM may pass a plain list string — try parsing directly
-        try:
-            findings = json.loads(findings_json)
-            if isinstance(findings, list):
-                pass
+        if isinstance(findings_json, dict):
+            # Already parsed — Gemini proto Struct → dict
+            findings = findings_json.get("findings", [])
+        elif isinstance(findings_json, list):
+            findings = findings_json
+        else:
+            # String — parse it
+            text = str(findings_json).strip()
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                findings = parsed.get("findings", [])
+            elif isinstance(parsed, list):
+                findings = parsed
             else:
                 findings = []
+    except Exception as e:
+        logger.warning(f"finish_investigation: could not parse findings_json ({type(findings_json)}): {e}")
+        # Last resort — try regex extraction
+        try:
+            match = re.search(r'"findings"\s*:\s*(\[.*\])', str(findings_json), re.DOTALL)
+            findings = json.loads(match.group(1)) if match else []
         except Exception:
             findings = []
 
@@ -494,7 +509,26 @@ async def investigate_node(state: AgentState) -> AgentState:
             inventory    = batch_inventory,
         )
         findings, _ = _run_investigation_batch(client, prompt, label)
-        print(f"   [{label}] findings: {len(findings)}")
+        print(f"   [{label}] findings: {len(findings)} / {len(processors)} expected")
+
+        # Enforce count integrity at batch level — if LLM dropped processors,
+        # create stub findings so nothing is silently lost.
+        found_ids = {f.get("processor_id") for f in findings}
+        for p in processors:
+            if p["processor_id"] not in found_ids:
+                logger.warning(f"  [{label}] Missing finding for {p['processor_id']} — adding stub")
+                findings.append({
+                    "processor_id"    : p["processor_id"],
+                    "step_name"       : p["name"],
+                    "step_type"       : p["type"],
+                    "status"          : category.upper(),
+                    "purpose"         : "Investigation incomplete — LLM did not produce a finding for this processor.",
+                    "business_impact" : "Unknown — manual review required.",
+                    "technical_detail": "No finding produced by agent. Check processor files manually.",
+                    "risk_level"      : "medium",
+                    "risk_reason"     : "Stub — agent did not investigate this processor",
+                })
+
         return findings
 
     CHUNK_SIZE = 5  # max processors per LLM call — prevents context overload on large diffs
@@ -516,6 +550,19 @@ async def investigate_node(state: AgentState) -> AgentState:
     all_findings += _run_chunked("modified", inventory.get("modified", []), "MODIFIED")
 
     files_read = list(_tool_state["files_read"])
+
+    # Filter out hallucinated findings — LLM may invent processor IDs not in the delta
+    _delta = state["delta"]
+    all_valid_ids = (
+        {s["processor_id"] for s in _delta.get("new_steps",     [])} |
+        {s["processor_id"] for s in _delta.get("removed_steps", [])} |
+        {s["processor_id"] for s in state.get("modified_steps", [])}
+    )
+    before = len(all_findings)
+    all_findings = [f for f in all_findings if f.get("processor_id", "") in all_valid_ids]
+    if len(all_findings) < before:
+        logger.warning(f"  Filtered {before - len(all_findings)} hallucinated finding(s) "
+                       f"with unknown processor_ids")
 
     # Enforce risk floor: modified steps are NEVER low risk.
     modified_ids = {s["processor_id"] for s in state.get("modified_steps", [])}
@@ -612,9 +659,20 @@ async def synthesize_node(state: AgentState) -> AgentState:
 
     # Enforce count integrity — LLM sometimes collapses multiple findings into one.
     # If the report arrays are shorter than findings, backfill from findings directly.
-    def _backfill(report_key: str, status: str):
-        report_entries  = report.get(report_key, [])
-        finding_entries = [f for f in findings if f.get("status", "").upper() == status]
+    # Build valid processor ID sets from delta — used to filter hallucinated findings
+    valid_new_ids      = {s["processor_id"] for s in delta.get("new_steps",      [])}
+    valid_removed_ids  = {s["processor_id"] for s in delta.get("removed_steps",  [])}
+    valid_modified_ids = {s["processor_id"] for s in state.get("modified_steps", [])}
+
+    def _backfill(report_key: str, status: str, valid_ids: set):
+        # Only include findings with processor_ids that exist in the delta
+        # This filters out hallucinated processors the LLM may have invented
+        finding_entries = [
+            f for f in findings
+            if f.get("status", "").upper() == status
+            and f.get("processor_id", "") in valid_ids
+        ]
+        report_entries = report.get(report_key, [])
         if len(report_entries) < len(finding_entries):
             logger.warning(
                 f"SYNTHESIZE truncated {report_key}: "
@@ -632,9 +690,9 @@ async def synthesize_node(state: AgentState) -> AgentState:
                 for f in finding_entries
             ]
 
-    _backfill("new_steps",      "NEW")
-    _backfill("removed_steps",  "REMOVED")
-    _backfill("modified_steps", "MODIFIED")
+    _backfill("new_steps",      "NEW",      valid_new_ids)
+    _backfill("removed_steps",  "REMOVED",  valid_removed_ids)
+    _backfill("modified_steps", "MODIFIED", valid_modified_ids)
 
     # Metadata
     report["generated_at"]            = datetime.now(timezone.utc).isoformat()

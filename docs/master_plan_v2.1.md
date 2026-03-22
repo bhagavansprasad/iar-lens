@@ -569,6 +569,25 @@ Enforced in the INVESTIGATE prompt: "a silent logic change is NEVER low risk".
 Modified steps can only be rated medium or high. This ensures processor_964-
 style silent routing condition changes are never dismissed as low risk.
 
+**M4: finish_investigation receives proto Struct, not JSON string** (March 2026)
+When Gemini native function calling passes arguments, findings_json arrives as
+a proto Struct (dict), not a raw JSON string. json.loads() fails silently on a
+dict. Must handle all three cases: dict (.get("findings")), list (use directly),
+string (json.loads). This was root cause of MODIFIED 1/2 returning 0 findings.
+
+**M4: Per-batch stub enforcement + SYNTHESIZE backfill** (March 2026)
+Two-layer count integrity: (1) _run_batch adds stub findings for any processor
+the LLM dropped; (2) _backfill in synthesize_node rebuilds arrays from raw
+findings if LLM truncated them. Both layers filter by valid processor IDs from
+delta to prevent hallucinated processors inflating counts.
+
+**M4: Hallucination filtering on processor IDs** (March 2026)
+LLM may invent processor IDs not in the delta by reasoning from context
+(e.g. inventing "processor_UNKNOWN_OracleInventorySync"). Filter applied in
+investigate_node and synthesize_node _backfill using valid_ids sets built from
+delta new/removed/modified lists. Removes hallucinated findings before they
+reach the report.
+
 ---
 
 ## Context Capture Process (End of Every Milestone)
@@ -603,7 +622,7 @@ The generated package contains:
 - M1 ✅ — Structural delta, 67/67 tests passing
 - M2 ✅ — Modified steps detection, 29/29 tests passing
 - M3 ✅ — Flow understander, 23/23 tests passing, 69/69 full regression
-- M4 ✅ — Agent investigation, 32-33: 17/17, 49-50: 14/14, 55-56: 14/14
+- M4 ✅ — Agent investigation, 59/59 total: 32-33: 17/17, 49-50: 14/14, 51-52: 14/14, 55-56: 14/14
 
 ### Current milestone
 **M5 — Report Generator — PENDING**
@@ -613,9 +632,10 @@ The generated package contains:
 
 ### Current file states
 - `src/agent_state.py` — ✅ done
-- `src/agent_prompts.py` — ✅ done
-- `src/agent.py` — ✅ done. LLM-driven, 3-category investigation, chunked batches (CHUNK_SIZE=5), risk floor enforced in both investigate_node and synthesize_node.
-- `tests/test_m4_agent.py` — ✅ done
+- `src/agent_prompts.py` — ✅ done. SYNTHESIZE prompt has CRITICAL RULES enforcing one entry per finding.
+- `src/agent.py` — ✅ done. LLM-driven, 3-category investigation, chunked batches (CHUNK_SIZE=5), risk floor enforced in both investigate_node and synthesize_node. Full hallucination filtering. Per-batch stub enforcement. Backfill in SYNTHESIZE.
+- `tests/test_m4_agent.py` — ✅ done. 4 pairs: 32-33, 49-50, 51-52, 55-56.
+- `tools/capture_context.py` — ✅ updated. RESOURCE_REF path fixed, md_path uses glob, M5 validation checks strengthened, M3/M4/M5 milestone metadata updated, 51-52 ground truth added.
 
 ### Design decisions made this session
 - **LLM-driven over Python-driven** — adopted at M4. LLM receives full inventory upfront, calls `read_processor_files` on demand. Richer reasoning flows into M5 report quality.
@@ -623,44 +643,16 @@ The generated package contains:
 - **BUILD_INVENTORY is pure Python** — assembles structured map (new/removed/modified + file lists + changed_files snippets). No LLM cost.
 - **Modified steps include diff snippets in inventory** — LLM sees before/after content upfront. Reduces unnecessary tool calls.
 - **Risk floor medium for modified steps** — enforced in Python post-processing in both investigate_node and synthesize_node. Prompt-only enforcement is insufficient.
-- **Chunked batching (CHUNK_SIZE=5)** — large diffs (55-56: 33 processors) caused LLM to submit empty findings. Chunking into groups of 5 per LLM call fixes this. Small diffs (32-33, 49-50) unaffected.
+- **Chunked batching (CHUNK_SIZE=5)** — large diffs (55-56: 33 processors) caused LLM to submit empty findings. Chunking into groups of 5 per LLM call fixes this.
+- **finish_investigation proto Struct handling** — Gemini native function calling passes args as proto Struct (dict), not raw JSON string. Must handle all three cases: dict, list, string.
+- **Per-batch stub enforcement** — if LLM drops processors from a batch, stubs are created so nothing is silently lost. Combined with SYNTHESIZE backfill for full count integrity.
+- **Hallucination filtering** — LLM may invent processor IDs not in the delta (e.g. reasoning about context). Filter applied in both investigate_node and synthesize_node _backfill using valid_ids sets from delta.
 
 ### Open questions
 - Should CHUNK_SIZE=5 be configurable in config.py?
 
 ### Exact next action
-Write `src/report_generator.py` per M5 spec. Build section by section, validate readability at each step.
-
-**Section build order:**
-1. Header + What This Integration Does + What Changed (narrative sections first — validate readability)
-2. Full Flow Diagram (Mermaid — salvage from existing)
-3. Executive Summary + Statistics
-4. New Steps + Removed Steps (salvage from existing)
-5. Modified Steps ⭐ (NEW — before/after table per changed file, navigation path)
-6. Key Observations + Architect Review Checklist ⭐ (NEW) + Approval Conditions
-
-**Modified Steps section format (per step):**
-- Step name + type + risk badge
-- File changed + navigation path (processor_id → output_id → filename)
-- Before/after table showing old value → new value
-- What changed (plain English) + business impact
-
-**Architect Review Checklist format:**
-- `- [ ] Router_964 (contentBasedRouter) — verify retry cap of 11 is correct threshold`
-- `  Navigate: processor_964 → output_966 → expr.properties`
-- One item per modified step + one per high-risk new/removed step
-
-**Salvage from existing `src/report_generator.py`:**
-- `_trim_purpose`, `_trim_impact` — keep as-is
-- Mermaid generation (`_build_full_flow_diagram`) — keep as-is
-- `§N§` dynamic section numbering — keep as-is
-- `_risk()`, `_rec_icon()` helpers — keep as-is
-
-**Human readability requirements (from original requirements):**
-- Business people must understand without OIC knowledge
-- Node names must be meaningful (not Notification1 — say "Notification for Shipping Manager")
-- Navigation paths so architect can reach the node in OIC
-- Before/after values explicit — not just "condition changed"
-- Plain English narrative throughout
-
-**Test:** change_report.md has Modified Steps section showing processor_964 before/after + Checklist with processor_964 navigation.
+Write `src/report_generator.py` per M5 spec.
+Report section order: Header, What This Integration Does, What Changed, Full Flow Diagram (Mermaid), Executive Summary, Statistics, New Steps, Modified Steps (before/after table), Removed Steps, Key Observations, Architect Review Checklist, Approval Conditions.
+Salvage from old `src/report_generator.py`: `_trim_purpose`, `_trim_impact`, Mermaid generation.
+Test: change_report.md has Modified Steps section + Checklist with processor_964.
